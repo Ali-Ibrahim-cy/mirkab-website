@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="شعار مِركاب">
+  <rect width="64" height="64" rx="14" fill="#111214" stroke="#222428" stroke-width="2" />
+  <path d="M12 48L20.5 16H29.5L32 28.5L34.5 16H43.5L52 48H43.5L38.8 27.5L34.4 48H29.6L25.2 27.5L20.5 48H12Z" fill="#FFFFFF" />
+  <path d="M30.7 16H33.3L32.8 26H31.2L30.7 16Z" fill="#C5C7CA" />
+  <path d="M30.5 34H33.5L34 48H30L30.5 34Z" fill="#C5C7CA" />
+</svg>

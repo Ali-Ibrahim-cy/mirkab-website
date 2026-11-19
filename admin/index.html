@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>إدارة مِركاب | MIRKAB Studio Admin</title>
+  <meta name="robots" content="noindex, nofollow, noarchive" />
+  <meta name="theme-color" content="#050505" />
+  <link rel="icon" type="image/svg+xml" href="../favicon.svg" />
+  <link rel="stylesheet" href="../css/admin.css" />
+</head>
+<body>
+  <!-- شاشة تسجيل الدخول / الإعداد الأولي (الواجهة الإدارية محجوبة تماماً قبل تسجيل الدخول) -->
+  <main id="admin-login-screen" class="auth-screen">
+    <section class="auth-card" aria-labelledby="auth-heading">
+      <div class="auth-brand">
+        <svg class="brand-mark" viewBox="0 0 64 64" width="36" height="36" aria-hidden="true">
+          <rect x="1" y="1" width="62" height="62" rx="12" fill="#111214" stroke="#282A2E" stroke-width="2" />
+          <path d="M12 48L20.5 16H29.5L32 28.5L34.5 16H43.5L52 48H43.5L38.8 27.5L34.4 48H29.6L25.2 27.5L20.5 48H12Z" fill="#FFFFFF" />
+          <path d="M30.7 16H33.3L32.8 26H31.2L30.7 16Z" fill="#C5C7CA" />
+          <path d="M30.5 34H33.5L34 48H30L30.5 34Z" fill="#C5C7CA" />
+        </svg>
+        <div>
+          <p class="auth-eyebrow" lang="en" dir="ltr">MIRKAB PRIVATE CONSOLE</p>
+          <h1 id="auth-heading" class="auth-title">لوحة التحكم الإدارية</h1>
+        </div>
+      </div>
+
+      <p id="auth-subtitle" class="auth-subtitle"></p>
+
+      <form id="auth-form" class="auth-form" novalidate>
+        <div class="form-field">
+          <label for="auth-passphrase" id="auth-pass-label" class="field-label">رمز الدخول المحلي</label>
+          <input
+            type="password"
+            id="auth-passphrase"
+            class="field-input"
+            autocomplete="current-password"
+            minlength="6"
+            required
+          />
+        </div>
+
+        <div id="auth-confirm-wrap" class="form-field" hidden>
+          <label for="auth-passphrase-confirm" class="field-label">تأكيد رمز الدخول</label>
+          <input
+            type="password"
+            id="auth-passphrase-confirm"
+            class="field-input"
+            autocomplete="new-password"
+            minlength="6"
+          />
+        </div>
+
+        <p id="auth-error" class="form-error" role="alert" hidden></p>
+
+        <button type="submit" id="auth-submit-btn" class="btn btn-primary auth-submit-btn">
+          دخول إلى الإدارة
+        </button>
+      </form>
+
+      <div class="auth-security-note" role="note">
+        <strong>توضيح أمني صريح:</strong>
+        يعمل هذا المشروع كموقع ثابت (Static Site) بدون خادم خلفي؛ لذا فإن شاشة الدخول المحلية وتخزين البيانات في المتصفح مخصصان للتنظيم الشخصي على جهازك فقط، ولا يوفّران حماية أمنية خادمية ضد المتطفلين عند النشر العام.
+      </div>
+    </section>
+  </main>
+
+  <!-- هيكل لوحة التحكم (يُفعّل ويُملأ فقط بعد التحقق من تسجيل الدخول) -->
+  <div id="admin-shell" class="admin-shell" hidden>
+    <aside id="admin-sidebar" class="admin-sidebar" aria-label="القائمة الإدارية">
+      <div class="sidebar-header">
+        <div class="brand-lockup">
+          <svg class="brand-mark" viewBox="0 0 64 64" width="30" height="30" aria-hidden="true">
+            <rect x="1" y="1" width="62" height="62" rx="12" fill="#111214" stroke="#282A2E" stroke-width="2" />
+            <path d="M12 48L20.5 16H29.5L32 28.5L34.5 16H43.5L52 48H43.5L38.8 27.5L34.4 48H29.6L25.2 27.5L20.5 48H12Z" fill="#FFFFFF" />
+            <path d="M30.7 16H33.3L32.8 26H31.2L30.7 16Z" fill="#C5C7CA" />
+            <path d="M30.5 34H33.5L34 48H30L30.5 34Z" fill="#C5C7CA" />
+          </svg>
+          <div>
+            <span class="brand-title" id="sidebar-brand-name">مِركاب | MIRKAB</span>
+            <span class="brand-role">إدارة المحتوى والتشغيل</span>
+          </div>
+        </div>
+        <button type="button" id="sidebar-close-btn" class="icon-btn mobile-only" aria-label="إغلاق القائمة">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+        </button>
+      </div>
+
+      <nav class="sidebar-nav" id="admin-nav">
+        <button type="button" class="nav-item is-active" data-section="dashboard">1. الرئيسية</button>
+        <button type="button" class="nav-item" data-section="products">2. المنتجات</button>
+        <button type="button" class="nav-item" data-section="product-form">3. إضافة منتج</button>
+        <button type="button" class="nav-item" data-section="media">4. الصور</button>
+        <button type="button" class="nav-item" data-section="amazon-links">5. روابط Amazon</button>
+        <button type="button" class="nav-item" data-section="social">6. حسابات التواصل</button>
+        <button type="button" class="nav-item" data-section="settings">7. إعدادات الموقع</button>
+        <button type="button" class="nav-item" data-section="backup">8. النسخ الاحتياطي</button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <a href="../index.html" class="btn btn-surface btn-block" target="_blank" rel="noopener noreferrer">
+          معاينة الموقع العام
+        </a>
+        <button type="button" id="admin-logout-btn" class="btn btn-silver btn-block">
+          تسجيل الخروج
+        </button>
+      </div>
+    </aside>
+
+    <div class="admin-main-wrap">
+      <header class="admin-topbar">
+        <div class="topbar-right">
+          <button type="button" id="sidebar-open-btn" class="icon-btn mobile-only" aria-label="فتح القائمة الإدارية">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h16"/></svg>
+          </button>
+          <div>
+            <p class="topbar-kicker" lang="en" dir="ltr">MIRKAB ADMIN STUDIO</p>
+            <h2 id="topbar-view-title" class="topbar-title">الرئيسية</h2>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <button type="button" id="topbar-quick-add-btn" class="btn btn-silver">+ إضافة منتج</button>
+        </div>
+      </header>
+
+      <main id="admin-workspace" class="admin-workspace" tabindex="-1"></main>
+    </div>
+  </div>
+
+  <!-- نافذة التأكيد الداخلية (بديلة عن alert/confirm) -->
+  <div id="admin-confirm-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title" hidden>
+    <div class="modal-card">
+      <h3 id="confirm-modal-title" class="modal-card-title">تأكيد الإجراء</h3>
+      <p id="confirm-modal-message" class="modal-card-desc"></p>
+      <div class="modal-card-actions">
+        <button type="button" id="confirm-modal-cancel" class="btn btn-surface">إلغاء</button>
+        <button type="button" id="confirm-modal-ok" class="btn btn-primary">تأكيد</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- إشعار حالة عائم -->
+  <div id="admin-toast" class="admin-toast" role="status" aria-live="polite" hidden></div>
+
+  <script type="module" src="../js/admin.js"></script>
+</body>
+</html>

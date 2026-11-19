@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /admin/
+
+# Update the sitemap URL below to your published GitHub Pages domain before deployment.
+Sitemap: https://example.github.io/mirkab/sitemap.xml

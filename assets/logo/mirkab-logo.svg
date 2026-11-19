@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 64" width="240" height="64" role="img" aria-label="مِركاب | MIRKAB">
+  <rect x="1" y="1" width="62" height="62" rx="12" fill="#111214" stroke="#2A2C30" stroke-width="2" />
+  <path d="M12 48L20.5 16H29.5L32 28.5L34.5 16H43.5L52 48H43.5L38.8 27.5L34.4 48H29.6L25.2 27.5L20.5 48H12Z" fill="#FFFFFF" />
+  <path d="M30.7 16H33.3L32.8 26H31.2L30.7 16Z" fill="#C5C7CA" />
+  <path d="M30.5 34H33.5L34 48H30L30.5 34Z" fill="#C5C7CA" />
+  <text x="80" y="31" font-family="system-ui, -apple-system, 'Segoe UI', Tahoma, sans-serif" font-size="20" font-weight="700" fill="#FFFFFF">مِركاب</text>
+  <text x="80" y="50" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="12" font-weight="700" letter-spacing="2.2" fill="#C5C7CA">MIRKAB</text>
+</svg>

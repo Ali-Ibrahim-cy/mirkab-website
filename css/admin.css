@@ -100,6 +100,7 @@ body {
   color: var(--white);
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
+  transition: background-color 240ms var(--ease-luxury), color 240ms var(--ease-luxury);
 }
 
 button,
@@ -237,6 +238,13 @@ a {
   box-shadow: 0 24px 60px rgba(5, 5, 5, 0.78);
   display: grid;
   gap: 20px;
+}
+
+.auth-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .auth-brand {
@@ -413,6 +421,12 @@ a {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .topbar-kicker {
@@ -879,3 +893,101 @@ a {
     grid-template-columns: 1fr;
   }
 }
+
+/* ==========================================================================
+   Light Mode Theme (Admin Studio)
+   ========================================================================== */
+html[data-theme="light"] {
+  --bg-deep: #f3f4f6;
+  --bg-charcoal: #ffffff;
+  --silver: #474d57;
+  --white: #101216;
+  --gray-subtle: #646b76;
+  --border-hairline: rgba(16, 18, 22, 0.12);
+  --border-strong: rgba(16, 18, 22, 0.24);
+}
+
+html[data-theme="light"] .btn-primary {
+  background: linear-gradient(180deg, #1b1e24 0%, #090a0c 100%);
+  color: #ffffff;
+  border-color: #101216;
+}
+
+html[data-theme="light"] .btn-silver {
+  background: linear-gradient(135deg, #ffffff 0%, #e8ebf0 55%, #dde1e8 100%);
+  color: #101216;
+  border-color: rgba(16, 18, 22, 0.24);
+}
+
+html[data-theme="light"] .btn-silver:hover {
+  border-color: #101216;
+  background: linear-gradient(135deg, #ffffff 0%, #dfe3ea 100%);
+}
+
+html[data-theme="light"] .btn-danger {
+  background-color: #fff5f5;
+  color: #8f1d1d;
+  border-color: rgba(143, 29, 29, 0.28);
+}
+
+html[data-theme="light"] .btn-danger:hover {
+  background-color: #8f1d1d;
+  color: #ffffff;
+  border-color: #8f1d1d;
+}
+
+html[data-theme="light"] .auth-screen {
+  background: radial-gradient(circle at 50% 25%, rgba(16, 18, 22, 0.05) 0%, #f3f4f6 64%);
+}
+
+html[data-theme="light"] .auth-card {
+  background: linear-gradient(160deg, #ffffff 0%, #f7f8fa 100%);
+  box-shadow: 0 20px 50px rgba(16, 18, 22, 0.1);
+}
+
+html[data-theme="light"] .auth-security-note,
+html[data-theme="light"] .upload-stage {
+  background-color: #f4f5f7;
+}
+
+html[data-theme="light"] .form-error {
+  border-color: rgba(143, 29, 29, 0.35);
+  background-color: #fff5f5;
+  color: #8f1d1d;
+}
+
+html[data-theme="light"] .nav-item:hover {
+  background-color: rgba(16, 18, 22, 0.05);
+}
+
+html[data-theme="light"] .nav-item.is-active {
+  background: linear-gradient(135deg, rgba(16, 18, 22, 0.08) 0%, rgba(16, 18, 22, 0.03) 100%);
+  border-color: rgba(16, 18, 22, 0.24);
+}
+
+html[data-theme="light"] .admin-topbar {
+  background-color: rgba(255, 255, 255, 0.92);
+}
+
+html[data-theme="light"] .panel {
+  background: linear-gradient(165deg, #ffffff 0%, #f9fafb 100%);
+  box-shadow: 0 8px 24px rgba(16, 18, 22, 0.05);
+}
+
+html[data-theme="light"] .badge.is-published {
+  border-color: rgba(16, 18, 22, 0.32);
+  color: #101216;
+  background-color: #eef1f5;
+}
+
+html[data-theme="light"] .modal-backdrop {
+  background-color: rgba(16, 18, 22, 0.45);
+}
+
+html[data-theme="light"] .admin-toast {
+  background-color: #101216;
+  color: #ffffff;
+  border-color: #101216;
+  box-shadow: 0 14px 32px rgba(16, 18, 22, 0.22);
+}
+

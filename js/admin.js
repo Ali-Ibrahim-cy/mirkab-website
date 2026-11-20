@@ -12,6 +12,7 @@
 import { AdminAuth } from './admin-auth.js';
 import { MirkabStore, sanitizeHttpsUrl } from '../data/store-adapter.js';
 import { MirkabMediaDB, extractStoragePathFromUrl } from '../data/media-db.js';
+import { initThemeSystem } from './theme.js';
 
 const SECTION_TITLES = {
   dashboard: '1. الرئيسية',
@@ -2019,6 +2020,7 @@ function setupAdminShellEvents() {
 }
 
 async function initAdminConsole() {
+  initThemeSystem();
   setupAuthForm();
   setupAdminShellEvents();
 

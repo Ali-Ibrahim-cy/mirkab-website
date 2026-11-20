@@ -12,6 +12,9 @@
 
 import { createMirkab3DShowroom } from './car3d.js';
 import { MirkabStore, sanitizeHttpsUrl } from '../data/store-adapter.js';
+import { initThemeSystem, syncAllThemeButtons } from './theme.js';
+
+const FAVORITES_STORAGE_KEY = 'mirkab_favorites';
 
 const UI_TEXT = {
   ar: {
@@ -24,6 +27,25 @@ const UI_TEXT = {
     productsTitle: 'المنتجات المختارة',
     productsSubtitle: 'تشكيلة مختصرة تعرض الزبدة فقط — متوفرة عبر أمازون السعودية.',
     allCategories: 'الكل',
+    favoritesTab: 'المفضلة',
+    addToFavorites: 'إضافة إلى المفضلة',
+    removeFromFavorites: 'إزالة من المفضلة',
+    savedToFavoritesToast: 'تمت إضافة المنتج إلى المفضلة',
+    removedFromFavoritesToast: 'تمت إزالة المنتج من المفضلة',
+    emptyFavorites: 'لا توجد منتجات في المفضلة حالياً — اضغط على أيقونة القلب لحفظ ما يعجبك دون إنشاء حساب.',
+    shareProductBtn: 'مشاركة',
+    shareProductAria: 'مشاركة رابط المنتج',
+    linkCopiedToast: 'تم نسخ رابط المنتج للمشاركة',
+    linkCopyFailToast: 'تعذر نسخ الرابط تلقائياً',
+    buyingHelpBtn: 'مساعدة في الشراء',
+    buyingGuideFooterLabel: 'كيف تشتري من Amazon؟',
+    buyingGuideTitle: 'كيف تشتري من Amazon السعودية؟',
+    buyingGuideKicker: 'دليل الزائر المبسط — 8 خطوات',
+    buyingGuideBannerStrong: 'تصفح مِركاب مفتوح للجميع دون تسجيل:',
+    buyingGuideBannerBody: 'يمكنك استكشاف المنتجات وحفظ المفضلة ومشاركتها في موقعنا بحرية تامة دون أي حساب. الخطوات التالية توضّح للمبتدئين طريقة إتمام الطلب داخل موقع Amazon السعودية فقط.',
+    buyingGuideVisitAmazon: 'فتح Amazon السعودية',
+    buyingGuideClose: 'إغلاق الدليل',
+    buyingGuideBackProduct: 'العودة لتفاصيل المنتج',
     pricePendingSar: 'السعر بالريال السعودي على Amazon',
     viewProductBtn: 'عرض المنتج',
     buyOnAmazonBtn: 'شراء من Amazon',
@@ -44,6 +66,25 @@ const UI_TEXT = {
     productsTitle: 'Curated Products',
     productsSubtitle: 'Essential automotive gear — straight to the point, via Amazon.sa.',
     allCategories: 'All',
+    favoritesTab: 'Favorites',
+    addToFavorites: 'Add to Favorites',
+    removeFromFavorites: 'Remove from Favorites',
+    savedToFavoritesToast: 'Added to Favorites',
+    removedFromFavoritesToast: 'Removed from Favorites',
+    emptyFavorites: 'No favorite products yet — tap the heart icon on any item to save it locally without an account.',
+    shareProductBtn: 'Share',
+    shareProductAria: 'Share product link',
+    linkCopiedToast: 'Product link copied for sharing',
+    linkCopyFailToast: 'Could not copy link automatically',
+    buyingHelpBtn: 'Buying Help',
+    buyingGuideFooterLabel: 'How to Buy from Amazon?',
+    buyingGuideTitle: 'How to Buy from Amazon.sa?',
+    buyingGuideKicker: 'Beginner Buyer Guide — 8 Steps',
+    buyingGuideBannerStrong: 'Browsing MIRKAB requires no account:',
+    buyingGuideBannerBody: 'You can browse, save favorites, and share products freely here without signing in. The steps below only explain completing an order on Amazon.sa for first-time buyers.',
+    buyingGuideVisitAmazon: 'Open Amazon.sa',
+    buyingGuideClose: 'Close Guide',
+    buyingGuideBackProduct: 'Back to Product Details',
     pricePendingSar: 'Price in SAR on Amazon',
     viewProductBtn: 'View Product',
     buyOnAmazonBtn: 'Buy on Amazon',
@@ -56,11 +97,117 @@ const UI_TEXT = {
   }
 };
 
+const BUYING_GUIDE_STEPS = [
+  {
+    icon: 'globe',
+    ar: {
+      title: 'الدخول إلى Amazon السعودية',
+      desc: 'افتح موقع amazon.sa من المتصفح أو عبر تطبيق Amazon على جوالك وتأكد من اختيار المملكة العربية السعودية.'
+    },
+    en: {
+      title: 'Visit Amazon Saudi Arabia',
+      desc: 'Open amazon.sa in your browser or the Amazon app and verify Saudi Arabia is selected.'
+    }
+  },
+  {
+    icon: 'userPlus',
+    ar: {
+      title: 'إنشاء حساب جديد',
+      desc: 'عند الشراء لأول مرة، اختر «إنشاء حساب» في Amazon وأدخل اسمك ورقم الجوال أو البريد الإلكتروني وكلمة مرور آمنة.'
+    },
+    en: {
+      title: 'Create a New Account',
+      desc: 'If it is your first order on Amazon, select Create Account and enter your name, mobile/email, and password.'
+    }
+  },
+  {
+    icon: 'logIn',
+    ar: {
+      title: 'تسجيل الدخول',
+      desc: 'إذا كان لديك حساب سابق في Amazon، اضغط «تسجيل الدخول» وأدخل بياناتك للوصول إلى حسابك.'
+    },
+    en: {
+      title: 'Sign In',
+      desc: 'If you already have an Amazon account, choose Sign In and enter your credentials.'
+    }
+  },
+  {
+    icon: 'search',
+    ar: {
+      title: 'اختيار المنتج',
+      desc: 'اضغط على زر «شراء من Amazon» داخل مِركاب للانتقال مباشرة إلى صفحة المنتج الرسمية ومراجعة السعر والمواصفات والتقييمات.'
+    },
+    en: {
+      title: 'Select the Product',
+      desc: 'Click Buy on Amazon inside MIRKAB to open the official Amazon.sa listing and review price, options, and reviews.'
+    }
+  },
+  {
+    icon: 'cart',
+    ar: {
+      title: 'إضافة المنتج إلى عربة التسوق',
+      desc: 'حدد الكمية أو الخيار المطلوب ثم اضغط «أضف إلى العربة» أو «اشترِ الآن» للمتابعة.'
+    },
+    en: {
+      title: 'Add Product to Cart',
+      desc: 'Choose quantity or variant and tap Add to Cart or Buy Now to proceed.'
+    }
+  },
+  {
+    icon: 'mapPin',
+    ar: {
+      title: 'إدخال عنوان التوصيل',
+      desc: 'أضف عنوانك في السعودية (المدينة، الحي، الشارع، ورقم الجوال) أو اختر نقطة استلام قريبة.'
+    },
+    en: {
+      title: 'Enter Delivery Address',
+      desc: 'Provide your shipping address in Saudi Arabia (city, district, street, mobile) or select a pickup locker.'
+    }
+  },
+  {
+    icon: 'creditCard',
+    ar: {
+      title: 'اختيار وسيلة الدفع',
+      desc: 'اختر طريقة الدفع المناسبة لك مثل بطاقة مدى، البطاقة الائتمانية، Apple Pay، أو الدفع عند الاستلام عند توفره.'
+    },
+    en: {
+      title: 'Choose Payment Method',
+      desc: 'Pick Mada, credit/debit card, Apple Pay, or Cash on Delivery when eligible.'
+    }
+  },
+  {
+    icon: 'checkCircle',
+    ar: {
+      title: 'تأكيد الطلب ومتابعة الشحنة',
+      desc: 'راجع تفاصيل الطلب والسعر النهائي ثم اضغط «تأكيد الطلب»، ويمكنك متابعة مسار الشحنة من صفحة «طلباتي».'
+    },
+    en: {
+      title: 'Confirm Order & Track Shipment',
+      desc: 'Review the order summary and confirm. Track delivery progress anytime from Your Orders in Amazon.'
+    }
+  }
+];
+
+function loadSavedFavorites() {
+  try {
+    const raw = window.localStorage.getItem(FAVORITES_STORAGE_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.map((id) => String(id || '').trim()).filter(Boolean));
+  } catch {
+    return new Set();
+  }
+}
+
 const state = {
   lang: 'ar',
   selectedCategory: 'all',
+  favorites: loadSavedFavorites(),
   lastFocusedElement: null,
-  modalCloseTimer: 0
+  modalCloseTimer: 0,
+  toastTimer: 0,
+  guideReturnProductId: ''
 };
 
 const SECTIONS = ['home', 'products'];
@@ -106,13 +253,13 @@ function createEl(tag, className, textContent) {
   return el;
 }
 
-function createSvgIcon(iconName, size = 18) {
+function createSvgIcon(iconName, size = 18, options = {}) {
   const ns = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(ns, 'svg');
   svg.setAttribute('viewBox', '0 0 24 24');
   svg.setAttribute('width', String(size));
   svg.setAttribute('height', String(size));
-  svg.setAttribute('fill', 'none');
+  svg.setAttribute('fill', options.filled ? 'currentColor' : 'none');
   svg.setAttribute('stroke', 'currentColor');
   svg.setAttribute('stroke-width', '1.8');
   svg.setAttribute('stroke-linecap', 'round');
@@ -131,8 +278,67 @@ function createSvgIcon(iconName, size = 18) {
       'M15 3h6v6',
       'M10 14 21 3',
       'M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6'
+    ],
+    heart: [
+      'M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z'
+    ],
+    share: [
+      'M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8',
+      'm16 6-4-4-4 4',
+      'M12 2v13'
+    ],
+    globe: [
+      'M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2Z',
+      'M2 12h20',
+      'M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10Z'
+    ],
+    userPlus: [
+      'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2',
+      'M9 7a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z',
+      'M19 8v6',
+      'M22 11h-6'
+    ],
+    logIn: [
+      'M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4',
+      'm10 17 5-5-5-5',
+      'M15 12H3'
+    ],
+    search: [
+      'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z',
+      'm21 21-4.3-4.3'
+    ],
+    cart: [
+      'M8 21a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z',
+      'M19 21a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z',
+      'M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57l1.65-7.43H5.12'
+    ],
+    mapPin: [
+      'M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z',
+      'M12 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z'
+    ],
+    creditCard: [
+      'M3 5h18a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z',
+      'M1 10h22'
+    ],
+    checkCircle: [
+      'M22 11.08V12a10 10 0 1 1-5.93-9.14',
+      'm9 11 3 3L22 4'
     ]
   };
+
+  if (iconName === 'userPlus') {
+    const circle = document.createElementNS(ns, 'circle');
+    circle.setAttribute('cx', '9');
+    circle.setAttribute('cy', '7');
+    circle.setAttribute('r', '4');
+    svg.appendChild(circle);
+    ['M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2', 'M19 8v6', 'M22 11h-6'].forEach((d) => {
+      const pathEl = document.createElementNS(ns, 'path');
+      pathEl.setAttribute('d', d);
+      svg.appendChild(pathEl);
+    });
+    return svg;
+  }
 
   (pathsByIcon[iconName] || pathsByIcon.box).forEach((d) => {
     const pathEl = document.createElementNS(ns, 'path');
@@ -141,6 +347,129 @@ function createSvgIcon(iconName, size = 18) {
   });
 
   return svg;
+}
+
+function showToast(message) {
+  const toast = document.getElementById('mirkab-toast');
+  if (!toast || !message) return;
+  if (state.toastTimer) {
+    clearTimeout(state.toastTimer);
+  }
+  toast.textContent = message;
+  toast.hidden = false;
+  state.toastTimer = window.setTimeout(() => {
+    toast.hidden = true;
+    state.toastTimer = 0;
+  }, 3000);
+}
+
+function saveFavoritesToStorage() {
+  try {
+    window.localStorage.setItem(FAVORITES_STORAGE_KEY, JSON.stringify(Array.from(state.favorites)));
+  } catch {
+    // تجاهل تقييد التخزين
+  }
+}
+
+function isProductFavorite(productId) {
+  return Boolean(productId && state.favorites.has(productId));
+}
+
+function getPublishedFavoritesCount() {
+  const published = MirkabStore.getProducts();
+  let count = 0;
+  published.forEach((p) => {
+    if (state.favorites.has(p.id)) count += 1;
+  });
+  return count;
+}
+
+function syncFavoriteButtonsUI() {
+  document.querySelectorAll('[data-fav-product]').forEach((btn) => {
+    const id = btn.getAttribute('data-fav-product');
+    const active = isProductFavorite(id);
+    const label = active ? t('removeFromFavorites') : t('addToFavorites');
+    btn.classList.toggle('is-favorited', active);
+    btn.setAttribute('aria-pressed', String(active));
+    btn.setAttribute('aria-label', label);
+    btn.setAttribute('title', label);
+
+    const textSlot = btn.querySelector('.fav-btn-text');
+    if (textSlot) {
+      textSlot.textContent = label;
+    }
+    const iconSlot = btn.querySelector('.fav-icon-slot');
+    if (iconSlot) {
+      iconSlot.replaceChildren(createSvgIcon('heart', 17, { filled: active }));
+    }
+  });
+}
+
+function toggleFavorite(productId) {
+  if (!productId) return;
+  const wasFav = state.favorites.has(productId);
+  if (wasFav) {
+    state.favorites.delete(productId);
+    showToast(t('removedFromFavoritesToast'));
+  } else {
+    state.favorites.add(productId);
+    showToast(t('savedToFavoritesToast'));
+  }
+  saveFavoritesToStorage();
+  renderCategoryFilterBar();
+  if (state.selectedCategory === 'favorites') {
+    renderProducts(true);
+  } else {
+    syncFavoriteButtonsUI();
+  }
+}
+
+async function copyTextWithFallback(text) {
+  if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // المتابعة للطريقة البديلة
+    }
+  }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+async function shareProduct(product) {
+  if (!product) return;
+  const copy = product[state.lang] || product.ar;
+  const shareUrl = new URL(`#product/${product.id}`, window.location.href).href;
+  const shareText = copy.benefit ? `${copy.name} — ${copy.benefit}` : copy.name;
+
+  if (typeof navigator.share === 'function') {
+    try {
+      await navigator.share({
+        title: copy.name,
+        text: shareText,
+        url: shareUrl
+      });
+      return;
+    } catch (err) {
+      if (err && err.name === 'AbortError') return;
+    }
+  }
+
+  const copied = await copyTextWithFallback(shareUrl);
+  showToast(copied ? t('linkCopiedToast') : t('linkCopyFailToast'));
 }
 
 /* ==========================================================================
@@ -326,6 +655,7 @@ function applyLanguageBindings() {
 function toggleLanguage() {
   state.lang = state.lang === 'ar' ? 'en' : 'ar';
   applyLanguageBindings();
+  syncAllThemeButtons();
   renderCategoryFilterBar();
   renderProducts(true);
   if (document.getElementById('products-sync-notice')) {
@@ -337,6 +667,8 @@ function toggleLanguage() {
   const hash = window.location.hash.replace(/^#/, '');
   if (hash.startsWith('product/')) {
     openProductModal(hash.slice('product/'.length));
+  } else if (hash === 'buying-guide') {
+    openBuyingGuideModal(state.guideReturnProductId);
   } else if (hash === 'privacy' || hash === 'disclosure') {
     openPolicyModal(hash);
   }
@@ -364,11 +696,14 @@ function renderCategoryFilterBar() {
   if (!bar) return;
 
   const frag = document.createDocumentFragment();
-  const makeTab = (id, label) => {
+  const makeTab = (id, label, iconEl = null) => {
     const isActive = state.selectedCategory === id;
-    const btn = createEl('button', `cat-filter-btn ${isActive ? 'is-active' : ''}`.trim(), label);
+    const btn = createEl('button', `cat-filter-btn ${isActive ? 'is-active' : ''}`.trim());
     btn.type = 'button';
+    btn.dataset.categoryTab = id;
     btn.setAttribute('aria-pressed', String(isActive));
+    if (iconEl) btn.appendChild(iconEl);
+    btn.appendChild(createEl('span', '', label));
     btn.addEventListener('click', () => {
       state.selectedCategory = id;
       renderCategoryFilterBar();
@@ -381,6 +716,10 @@ function renderCategoryFilterBar() {
   MirkabStore.getCategories().forEach((cat) => {
     frag.appendChild(makeTab(cat.id, cat[state.lang]));
   });
+
+  const favCount = getPublishedFavoritesCount();
+  const favIcon = createSvgIcon('heart', 14, { filled: favCount > 0 });
+  frag.appendChild(makeTab('favorites', `${t('favoritesTab')} (${favCount})`, favIcon));
 
   bar.replaceChildren(frag);
 }
@@ -453,12 +792,18 @@ function renderProducts(isInteractiveUpdate = false) {
   const grid = document.getElementById('products-grid');
   if (!grid) return;
 
-  const filtered = MirkabStore.getProducts({ category: state.selectedCategory });
+  const filtered =
+    state.selectedCategory === 'favorites'
+      ? MirkabStore.getProducts().filter((item) => state.favorites.has(item.id))
+      : MirkabStore.getProducts({ category: state.selectedCategory });
+
   if (!filtered.length) {
     const emptyMsg =
-      state.lang === 'en'
-        ? 'No published products are currently available in this category.'
-        : 'لا توجد منتجات منشورة متاحة في هذا التصنيف حالياً.';
+      state.selectedCategory === 'favorites'
+        ? t('emptyFavorites')
+        : state.lang === 'en'
+          ? 'No published products are currently available in this category.'
+          : 'لا توجد منتجات منشورة متاحة في هذا التصنيف حالياً.';
     grid.replaceChildren(createEl('p', 'section-subtitle', emptyMsg));
     return;
   }
@@ -468,6 +813,7 @@ function renderProducts(isInteractiveUpdate = false) {
   filtered.forEach((product, index) => {
     const copy = product[state.lang];
     const card = createEl('article', 'product-card reveal-item');
+    card.dataset.productId = product.id;
     card.style.setProperty('--stagger-index', isInteractiveUpdate ? '0' : String(index % 3));
     if (isInteractiveUpdate) card.classList.add('is-revealed');
 
@@ -504,7 +850,7 @@ function renderProducts(isInteractiveUpdate = false) {
     // 4. فائدة المنتج في جملة قصيرة جداً
     const benefit = createEl('p', 'product-benefit', copy.benefit);
 
-    // 5. زر «عرض المنتج» الفضي الأنيق لفتح واجهة التفاصيل داخل الموقع
+    // 5. أزرار البطاقة: عرض المنتج + المفضلة + المشاركة (دون حساب)
     const actions = createEl('div', 'product-actions');
     const viewBtn = createEl('button', 'btn btn-silver product-view-btn');
     viewBtn.type = 'button';
@@ -512,7 +858,28 @@ function renderProducts(isInteractiveUpdate = false) {
     arrow.classList.add('btn-arrow');
     viewBtn.append(createEl('span', '', t('viewProductBtn')), arrow);
     viewBtn.addEventListener('click', () => openProductModal(product.id));
-    actions.appendChild(viewBtn);
+
+    const favActive = isProductFavorite(product.id);
+    const favLabel = favActive ? t('removeFromFavorites') : t('addToFavorites');
+    const favBtn = createEl('button', `product-icon-btn product-fav-btn ${favActive ? 'is-favorited' : ''}`.trim());
+    favBtn.type = 'button';
+    favBtn.setAttribute('data-fav-product', product.id);
+    favBtn.setAttribute('aria-pressed', String(favActive));
+    favBtn.setAttribute('aria-label', favLabel);
+    favBtn.title = favLabel;
+    const favIconSlot = createEl('span', 'fav-icon-slot');
+    favIconSlot.appendChild(createSvgIcon('heart', 17, { filled: favActive }));
+    favBtn.appendChild(favIconSlot);
+    favBtn.addEventListener('click', () => toggleFavorite(product.id));
+
+    const shareBtn = createEl('button', 'product-icon-btn product-share-btn');
+    shareBtn.type = 'button';
+    shareBtn.setAttribute('aria-label', t('shareProductAria'));
+    shareBtn.title = t('shareProductAria');
+    shareBtn.appendChild(createSvgIcon('share', 17));
+    shareBtn.addEventListener('click', () => shareProduct(product));
+
+    actions.append(viewBtn, favBtn, shareBtn);
 
     body.append(title, priceEl, benefit, actions);
     card.append(media, body);
@@ -529,7 +896,15 @@ function renderProducts(isInteractiveUpdate = false) {
 /* ==========================================================================
    واجهة تفاصيل المنتج داخل نفس الموقع (انتقال سلس + تقسيم احترافي)
    ========================================================================== */
-function openModal({ kicker, title, bodyNodes, hashValue, isProductDetail = false, labelledById = 'modal-title' }) {
+function openModal({
+  kicker,
+  title,
+  bodyNodes,
+  hashValue,
+  isProductDetail = false,
+  isBuyingGuide = false,
+  labelledById = 'modal-title'
+}) {
   const backdrop = document.getElementById('mirkab-modal');
   const dialog = backdrop ? backdrop.querySelector('.modal-dialog') : null;
   const kickerEl = document.getElementById('modal-kicker');
@@ -547,6 +922,7 @@ function openModal({ kicker, title, bodyNodes, hashValue, isProductDetail = fals
   }
 
   dialog.classList.toggle('is-product-detail', isProductDetail);
+  dialog.classList.toggle('is-buying-guide', isBuyingGuide);
   backdrop.setAttribute('aria-labelledby', labelledById);
   kickerEl.textContent = kicker || '';
   titleEl.textContent = title || '';
@@ -580,15 +956,19 @@ function closeModal(updateHash = true) {
 
   backdrop.classList.remove('is-open');
   document.body.style.overflow = '';
+  state.guideReturnProductId = '';
 
-  if (updateHash && /^#(product|privacy|disclosure)/.test(window.location.hash)) {
+  if (updateHash && /^#(product|privacy|disclosure|buying-guide)/.test(window.location.hash)) {
     history.pushState(null, '', '#products');
   }
 
   const finishClose = () => {
     state.modalCloseTimer = 0;
     backdrop.hidden = true;
-    if (dialog) dialog.classList.remove('is-product-detail');
+    if (dialog) {
+      dialog.classList.remove('is-product-detail');
+      dialog.classList.remove('is-buying-guide');
+    }
     if (state.lastFocusedElement && typeof state.lastFocusedElement.focus === 'function') {
       state.lastFocusedElement.focus({ preventScroll: true });
     }
@@ -684,6 +1064,32 @@ function openProductModal(productId) {
     });
     topCtaWrap.append(buyBtn, inlineNotice);
   }
+
+  // إجراءات الزائر الإضافية: المفضلة + المشاركة + مساعدة في الشراء
+  const guestRow = createEl('div', 'detail-secondary-actions');
+  const favActive = isProductFavorite(product.id);
+  const favLabel = favActive ? t('removeFromFavorites') : t('addToFavorites');
+  const modalFavBtn = createEl('button', `btn btn-surface detail-guest-btn ${favActive ? 'is-favorited' : ''}`.trim());
+  modalFavBtn.type = 'button';
+  modalFavBtn.setAttribute('data-fav-product', product.id);
+  modalFavBtn.setAttribute('aria-pressed', String(favActive));
+  const modalFavIcon = createEl('span', 'fav-icon-slot');
+  modalFavIcon.appendChild(createSvgIcon('heart', 17, { filled: favActive }));
+  modalFavBtn.append(modalFavIcon, createEl('span', 'fav-btn-text', favLabel));
+  modalFavBtn.addEventListener('click', () => toggleFavorite(product.id));
+
+  const modalShareBtn = createEl('button', 'btn btn-surface detail-guest-btn');
+  modalShareBtn.type = 'button';
+  modalShareBtn.append(createSvgIcon('share', 17), createEl('span', '', t('shareProductBtn')));
+  modalShareBtn.addEventListener('click', () => shareProduct(product));
+
+  guestRow.append(modalFavBtn, modalShareBtn);
+
+  const guideLinkBtn = createEl('button', 'detail-guide-link', t('buyingGuideFooterLabel'));
+  guideLinkBtn.type = 'button';
+  guideLinkBtn.addEventListener('click', () => openBuyingGuideModal(product.id));
+
+  topCtaWrap.append(guestRow, guideLinkBtn);
   infoCol.appendChild(topCtaWrap);
 
   // 2. اسم المنتج والسعر
@@ -787,9 +1193,75 @@ function openPolicyModal(type) {
       bodyNodes: nodes,
       hashValue: 'disclosure',
       isProductDetail: false,
+      isBuyingGuide: false,
       labelledById: 'modal-title'
     });
   }
+}
+
+function openBuyingGuideModal(returnToProductId = '') {
+  state.guideReturnProductId = typeof returnToProductId === 'string' ? returnToProductId : '';
+
+  const banner = createEl('div', 'guide-intro-banner');
+  banner.append(
+    createEl('strong', '', `${t('buyingGuideBannerStrong')} `),
+    document.createTextNode(t('buyingGuideBannerBody'))
+  );
+
+  const stepsGrid = createEl('div', 'guide-steps-grid');
+  BUYING_GUIDE_STEPS.forEach((step, idx) => {
+    const copy = step[state.lang] || step.ar;
+    const card = createEl('article', 'guide-step-card');
+
+    const head = createEl('div', 'guide-step-head');
+    const iconBox = createEl('span', 'guide-step-icon');
+    iconBox.appendChild(createSvgIcon(step.icon, 18));
+    const stepNumLabel = state.lang === 'en' ? `STEP ${idx + 1}` : `الخطوة ${idx + 1}`;
+    head.append(iconBox, createEl('span', 'guide-step-num', stepNumLabel));
+
+    card.append(
+      head,
+      createEl('h3', 'guide-step-title', copy.title),
+      createEl('p', 'guide-step-desc', copy.desc)
+    );
+    stepsGrid.appendChild(card);
+  });
+
+  const footerActions = createEl('div', 'guide-footer-actions');
+  const amazonHomeBtn = createEl('a', 'btn btn-primary');
+  amazonHomeBtn.href = 'https://www.amazon.sa/';
+  amazonHomeBtn.target = '_blank';
+  amazonHomeBtn.rel = 'noopener noreferrer';
+  amazonHomeBtn.append(createEl('span', '', t('buyingGuideVisitAmazon')), createSvgIcon('external', 16));
+
+  const actionGroup = createEl('div', 'hero-cta-row');
+  if (state.guideReturnProductId && MirkabStore.getProductById(state.guideReturnProductId)) {
+    const backProductBtn = createEl('button', 'btn btn-silver', t('buyingGuideBackProduct'));
+    backProductBtn.type = 'button';
+    const targetId = state.guideReturnProductId;
+    backProductBtn.addEventListener('click', () => {
+      state.guideReturnProductId = '';
+      openProductModal(targetId);
+    });
+    actionGroup.appendChild(backProductBtn);
+  }
+
+  const closeBtn = createEl('button', 'btn btn-surface', t('buyingGuideClose'));
+  closeBtn.type = 'button';
+  closeBtn.addEventListener('click', () => closeModal(true));
+  actionGroup.appendChild(closeBtn);
+
+  footerActions.append(amazonHomeBtn, actionGroup);
+
+  openModal({
+    kicker: t('buyingGuideKicker'),
+    title: t('buyingGuideTitle'),
+    bodyNodes: [banner, stepsGrid, footerActions],
+    hashValue: 'buying-guide',
+    isProductDetail: false,
+    isBuyingGuide: true,
+    labelledById: 'modal-title'
+  });
 }
 
 /* ==========================================================================
@@ -849,6 +1321,10 @@ function handleHashRoute() {
       openProductModal(id);
       return;
     }
+  }
+  if (raw === 'buying-guide') {
+    openBuyingGuideModal(state.guideReturnProductId);
+    return;
   }
   if (raw === 'privacy' || raw === 'disclosure') {
     openPolicyModal(raw);
@@ -950,6 +1426,10 @@ function setupEvents() {
     btn.addEventListener('click', () => openPolicyModal(btn.getAttribute('data-open-modal')));
   });
 
+  document.querySelectorAll('[data-open-guide]').forEach((btn) => {
+    btn.addEventListener('click', () => openBuyingGuideModal(''));
+  });
+
   const modalBackdrop = document.getElementById('mirkab-modal');
   const modalCloseBtn = document.getElementById('modal-close-btn');
   if (modalCloseBtn) modalCloseBtn.addEventListener('click', () => closeModal(true));
@@ -1009,12 +1489,14 @@ function showSupabaseFallbackNotice(show) {
 }
 
 async function initApp() {
+  initThemeSystem();
   evaluateMotionCapabilities();
   initScrollReveal();
   init3DHeroIntegration();
 
   // عرض الهوية والأيقونات والأحداث فوراً دون انتظار الشبكة
   applyLanguageBindings();
+  syncAllThemeButtons();
   renderFooterSocialLinks();
   setupEvents();
 

@@ -6,7 +6,7 @@
  * لا يحتوي على أي Service Role Key أو أسرار خاصة.
  */
 
-import { createClient } from '@supabase/supabase-js';
+import { createClient } from './vendor/supabase-js.js';
 
 export const SUPABASE_URL = 'https://dyfwxwzdixhvbgdulzcr.supabase.co';
 export const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_qPL37BeIe5JMvM2G6a0bXg_56XpJ3iB';

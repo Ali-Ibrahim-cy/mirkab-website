@@ -177,7 +177,7 @@ function initScrollReveal() {
         }
       });
     },
-    { rootMargin: '0px 0px -40px 0px', threshold: 0.06 }
+    { rootMargin: '120px 0px 120px 0px', threshold: 0.01 }
   );
 
   document.querySelectorAll('[data-reveal]').forEach((el) => {
@@ -198,7 +198,7 @@ function observeRevealItems(scopeEl) {
   const vh = window.innerHeight || 800;
   items.forEach((item) => {
     const rect = item.getBoundingClientRect();
-    if (rect.top < vh * 0.98 && rect.bottom > 0) {
+    if (rect.top < vh * 1.15 && rect.bottom > -120) {
       item.classList.add('is-revealed');
     } else {
       motionEnv.revealObserver.observe(item);
@@ -328,6 +328,9 @@ function toggleLanguage() {
   applyLanguageBindings();
   renderCategoryFilterBar();
   renderProducts(true);
+  if (document.getElementById('products-sync-notice')) {
+    showSupabaseFallbackNotice(true);
+  }
   renderFooterSocialLinks();
 
   // تحديث نافذة التفاصيل المفتوحة إن وجدت
@@ -451,6 +454,14 @@ function renderProducts(isInteractiveUpdate = false) {
   if (!grid) return;
 
   const filtered = MirkabStore.getProducts({ category: state.selectedCategory });
+  if (!filtered.length) {
+    const emptyMsg =
+      state.lang === 'en'
+        ? 'No published products are currently available in this category.'
+        : 'لا توجد منتجات منشورة متاحة في هذا التصنيف حالياً.';
+    grid.replaceChildren(createEl('p', 'section-subtitle', emptyMsg));
+    return;
+  }
 
   const fragment = document.createDocumentFragment();
 
@@ -856,15 +867,20 @@ function init3DHeroIntegration() {
   const header = document.getElementById('site-header');
   if (!canvas || !hero) return;
 
-  showroom3D = createMirkab3DShowroom(canvas, {
-    reducedMotion: motionEnv.reducedMotion,
-    onContextLost: () => {
-      if (fallback) fallback.hidden = false;
-    },
-    onContextRestored: () => {
-      if (fallback) fallback.hidden = true;
-    }
-  });
+  try {
+    showroom3D = createMirkab3DShowroom(canvas, {
+      reducedMotion: motionEnv.reducedMotion,
+      onContextLost: () => {
+        if (fallback) fallback.hidden = false;
+      },
+      onContextRestored: () => {
+        if (fallback) fallback.hidden = true;
+      }
+    });
+  } catch (err) {
+    console.error('3D Showroom initialization error:', err);
+    showroom3D = null;
+  }
 
   if (!showroom3D && fallback) {
     fallback.hidden = false;
@@ -971,25 +987,49 @@ function setupEvents() {
   }
 }
 
+function showSupabaseFallbackNotice(show) {
+  const section = document.getElementById('products');
+  const grid = document.getElementById('products-grid');
+  if (!section || !grid) return;
+  let notice = document.getElementById('products-sync-notice');
+  if (!show) {
+    if (notice) notice.remove();
+    return;
+  }
+  if (!notice) {
+    notice = createEl('p', 'section-subtitle');
+    notice.id = 'products-sync-notice';
+    notice.style.marginBottom = '20px';
+    grid.parentNode.insertBefore(notice, grid);
+  }
+  notice.textContent =
+    state.lang === 'en'
+      ? 'Live catalog sync is temporarily unavailable — showing default curated gear.'
+      : 'تعذر تحديث البيانات من الخادم حالياً — يتم عرض القائمة الأساسية.';
+}
+
 async function initApp() {
   evaluateMotionCapabilities();
   initScrollReveal();
   init3DHeroIntegration();
 
-  // عرض الأيقونات والإعدادات المبدئية فوراً ثم التحديث بالبيانات الحية من Supabase
+  // عرض الهوية والأيقونات والأحداث فوراً دون انتظار الشبكة
   applyLanguageBindings();
   renderFooterSocialLinks();
   setupEvents();
 
+  let loadRes = null;
   try {
-    await MirkabStore.loadPublicData();
+    loadRes = await MirkabStore.loadPublicData();
   } catch (err) {
     console.error('Supabase public fetch error:', err);
+    loadRes = { source: 'fallback-error' };
   }
 
   applyLanguageBindings();
   renderCategoryFilterBar();
   renderProducts();
+  showSupabaseFallbackNotice(loadRes?.source === 'fallback-error');
   renderFooterSocialLinks();
   handleHashRoute();
 }

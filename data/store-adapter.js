@@ -54,6 +54,10 @@ export function resolveProductImagePath(rawPath) {
     return trimmed;
   }
 
+  if (trimmed.startsWith('assets/')) {
+    return `./${trimmed}`;
+  }
+
   return `${PRODUCT_IMAGES_BUCKET_OR_DIR(trimmed)}`;
 }
 
@@ -188,9 +192,23 @@ function mergeSiteConfig(defaults, override) {
   };
 }
 
+function parseJsonField(raw) {
+  if (!raw) return null;
+  if (typeof raw === 'object') return raw;
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 function rowToProduct(row) {
   if (!row || typeof row !== 'object') return null;
-  const payload = row.data && typeof row.data === 'object' ? row.data : {};
+  const payload = parseJsonField(row.data) || {};
   return normalizeProductRecord({
     ...payload,
     id: row.id || payload.id,
@@ -220,59 +238,80 @@ function extractFileNameFromPath(pathStr) {
 
 export const MirkabStore = {
   /**
-   * جلب البيانات العامة للزوار من Supabase قبل عرض المنتجات.
+   * جلب البيانات العامة للزوار من Supabase قبل عرض المنتجات، مع آلية احتياطية آمنة.
    */
   async loadPublicData() {
-    const [settingsRes, publishedRes] = await Promise.all([
-      supabase
-        .from('site_settings')
-        .select('id, data')
-        .eq('id', SETTINGS_ROW_ID)
-        .maybeSingle(),
-      supabase
-        .from('products')
-        .select('id, category, status, sort_order, data')
-        .eq('status', 'published')
-        .order('sort_order', { ascending: true })
-    ]);
+    try {
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('SUPABASE_TIMEOUT')), 7000)
+      );
 
-    if (settingsRes.error) {
-      throw new Error(`LOAD_SETTINGS_FAILED: ${settingsRes.error.message}`);
-    }
-    if (publishedRes.error) {
-      throw new Error(`LOAD_PRODUCTS_FAILED: ${publishedRes.error.message}`);
-    }
+      const fetchPromise = Promise.all([
+        supabase
+          .from('site_settings')
+          .select('id, data')
+          .eq('id', SETTINGS_ROW_ID)
+          .maybeSingle(),
+        supabase
+          .from('products')
+          .select('id, category, status, sort_order, data')
+          .eq('status', 'published')
+          .order('sort_order', { ascending: true })
+      ]);
 
-    const hasSettingsRow = Boolean(settingsRes.data && settingsRes.data.data);
-    const publishedRows = Array.isArray(publishedRes.data) ? publishedRes.data : [];
+      const [settingsRes, publishedRes] = await Promise.race([fetchPromise, timeoutPromise]);
 
-    // إذا كانت قاعدة البيانات مهيأة أو تحتوي على بيانات نعتمدها بالكامل
-    if (hasSettingsRow || publishedRows.length > 0) {
-      memoryState.siteConfig = mergeSiteConfig(SITE_CONFIG, settingsRes.data?.data);
-      memoryState.products = publishedRows
-        .map(rowToProduct)
-        .filter((item) => item && item.id)
+      if (settingsRes.error) {
+        throw new Error(`LOAD_SETTINGS_FAILED: ${settingsRes.error.message}`);
+      }
+      if (publishedRes.error) {
+        throw new Error(`LOAD_PRODUCTS_FAILED: ${publishedRes.error.message}`);
+      }
+
+      const parsedSettings = parseJsonField(settingsRes.data?.data);
+      const hasSettingsRow = Boolean(parsedSettings);
+      const publishedRows = Array.isArray(publishedRes.data) ? publishedRes.data : [];
+
+      memoryState.siteConfig = hasSettingsRow
+        ? mergeSiteConfig(SITE_CONFIG, parsedSettings)
+        : structuredClone(SITE_CONFIG);
+
+      if (publishedRows.length > 0) {
+        memoryState.products = publishedRows
+          .map(rowToProduct)
+          .filter((item) => item && item.id)
+          .sort((a, b) => a.order - b.order);
+        memoryState.loadedFromSupabase = true;
+        return { source: 'supabase', count: memoryState.products.length };
+      }
+
+      // التحقق من وجود صفوف مسودة في جدول المنتجات قبل الرجوع للقائمة الأساسية الـ 11
+      const anyRowRes = await supabase.from('products').select('id').limit(1);
+      if (!anyRowRes.error && Array.isArray(anyRowRes.data) && anyRowRes.data.length > 0) {
+        memoryState.products = [];
+        memoryState.loadedFromSupabase = true;
+        return { source: 'supabase', count: 0 };
+      }
+
+      // جدول المنتجات بكر (لم يُهيأ من لوحة المالك بعد): عرض المنتجات الـ 11 الأساسية
+      memoryState.products = PRODUCTS.map(normalizeProductRecord)
+        .filter((item) => item && item.id && item.status === 'published')
         .sort((a, b) => a.order - b.order);
-      memoryState.loadedFromSupabase = true;
-      return { source: 'supabase', count: memoryState.products.length };
-    }
-
-    // التحقق من وجود مسودات في قاعدة البيانات قبل أي تراجع لقائمة البدء الأولية
-    const countRes = await supabase.from('products').select('id', { count: 'exact', head: true });
-    if (!countRes.error && (countRes.count || 0) > 0) {
+      memoryState.loadedFromSupabase = false;
+      return { source: 'seed-readonly', count: memoryState.products.length };
+    } catch (err) {
+      // في حال تعذر الاتصال بـ Supabase نعرض المنتجات الأساسية الـ 11 بدلاً من ترك القسم فارغاً
       memoryState.siteConfig = structuredClone(SITE_CONFIG);
-      memoryState.products = [];
-      memoryState.loadedFromSupabase = true;
-      return { source: 'supabase', count: 0 };
+      memoryState.products = PRODUCTS.map(normalizeProductRecord)
+        .filter((item) => item && item.id && item.status === 'published')
+        .sort((a, b) => a.order - b.order);
+      memoryState.loadedFromSupabase = false;
+      return {
+        source: 'fallback-error',
+        count: memoryState.products.length,
+        error: err?.message || 'SUPABASE_UNREACHABLE'
+      };
     }
-
-    // قاعدة بيانات بكر لم تُهيأ من لوحة المالك بعد: عرض الكتالوج الأولي المضمّن للقراءة فقط
-    memoryState.siteConfig = structuredClone(SITE_CONFIG);
-    memoryState.products = PRODUCTS.map(normalizeProductRecord)
-      .filter((item) => item && item.id && item.status === 'published')
-      .sort((a, b) => a.order - b.order);
-    memoryState.loadedFromSupabase = false;
-    return { source: 'seed-readonly', count: memoryState.products.length };
   },
 
   /**

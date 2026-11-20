@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="../css/admin.css" />
 </head>
 <body>
-  <!-- شاشة تسجيل الدخول / الإعداد الأولي (الواجهة الإدارية محجوبة تماماً قبل تسجيل الدخول) -->
+  <!-- شاشة تسجيل الدخول عبر Supabase Auth (الواجهة الإدارية محجوبة تماماً قبل تحقق جلسة المالك) -->
   <main id="admin-login-screen" class="auth-screen">
     <section class="auth-card" aria-labelledby="auth-heading">
       <div class="auth-brand">
@@ -26,29 +26,32 @@
         </div>
       </div>
 
-      <p id="auth-subtitle" class="auth-subtitle"></p>
+      <p id="auth-subtitle" class="auth-subtitle">سجّل الدخول بحساب المالك المعتمد عبر Supabase لإدارة المنتجات والصور والإعدادات.</p>
 
       <form id="auth-form" class="auth-form" novalidate>
         <div class="form-field">
-          <label for="auth-passphrase" id="auth-pass-label" class="field-label">رمز الدخول المحلي</label>
+          <label for="auth-email" class="field-label">البريد الإلكتروني للمالك</label>
           <input
-            type="password"
-            id="auth-passphrase"
+            type="email"
+            id="auth-email"
             class="field-input"
-            autocomplete="current-password"
-            minlength="6"
+            dir="ltr"
+            autocomplete="email"
+            placeholder="owner@domain.com"
             required
           />
         </div>
 
-        <div id="auth-confirm-wrap" class="form-field" hidden>
-          <label for="auth-passphrase-confirm" class="field-label">تأكيد رمز الدخول</label>
+        <div class="form-field">
+          <label for="auth-password" class="field-label">كلمة المرور</label>
           <input
             type="password"
-            id="auth-passphrase-confirm"
+            id="auth-password"
             class="field-input"
-            autocomplete="new-password"
+            dir="ltr"
+            autocomplete="current-password"
             minlength="6"
+            required
           />
         </div>
 
@@ -60,8 +63,8 @@
       </form>
 
       <div class="auth-security-note" role="note">
-        <strong>توضيح أمني صريح:</strong>
-        يعمل هذا المشروع كموقع ثابت (Static Site) بدون خادم خلفي؛ لذا فإن شاشة الدخول المحلية وتخزين البيانات في المتصفح مخصصان للتنظيم الشخصي على جهازك فقط، ولا يوفّران حماية أمنية خادمية ضد المتطفلين عند النشر العام.
+        <strong>مصادقة Supabase المقيّدة بالمالك:</strong>
+        الدخول متاح فقط لحساب المالك المسجّل مسبقاً، مع تعطيل إنشاء الحسابات وتطبيق سياسات الحماية (RLS) على قاعدة البيانات وحاوية الصور.
       </div>
     </section>
   </main>

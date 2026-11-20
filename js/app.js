@@ -12,7 +12,6 @@
 
 import { createMirkab3DShowroom } from './car3d.js';
 import { MirkabStore, sanitizeHttpsUrl } from '../data/store-adapter.js';
-import { MirkabMediaDB, isIndexedDbRef } from '../data/media-db.js';
 
 const UI_TEXT = {
   ar: {
@@ -214,38 +213,26 @@ function createSocialSvgIcon(platform) {
   const ns = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(ns, 'svg');
   svg.setAttribute('viewBox', '0 0 24 24');
-  svg.setAttribute('width', '17');
-  svg.setAttribute('height', '17');
-  svg.setAttribute('fill', 'none');
-  svg.setAttribute('stroke', 'currentColor');
-  svg.setAttribute('stroke-width', '1.8');
-  svg.setAttribute('stroke-linecap', 'round');
-  svg.setAttribute('stroke-linejoin', 'round');
+  svg.setAttribute('width', '18');
+  svg.setAttribute('height', '18');
+  svg.setAttribute('fill', 'currentColor');
   svg.setAttribute('aria-hidden', 'true');
 
-  const pathsByPlatform = {
-    instagram: [
-      'M7 2h10a5 5 0 0 1 5 5v10a5 5 0 0 1-5 5H7a5 5 0 0 1-5-5V7a5 5 0 0 1 5-5Z',
-      'M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37Z',
-      'M17.5 6.5h.01'
-    ],
-    tiktok: ['M9 12a4 4 0 1 0 4 4V4a5 5 0 0 0 5 5'],
-    snapchat: [
-      'M12 3c-2.6 0-4.2 1.8-4.2 4.3v1.9c-.6.2-1.2.4-1.6.7-.3.2-.3.7.1.9.7.3 1.4.6 1.5 1.1.1.8-.8 2.1-2.5 2.7-.4.2-.5.7-.1 1 .8.5 1.8.8 2.8 1 .4.1.6.7.8 1.2.2.4.7.6 1.2.5.7-.1 1.4-.3 2-.3s1.3.2 2 .3c.5.1 1-.1 1.2-.5.2-.5.4-1.1.8-1.2 1-.2 2-.5 2.8-1 .4-.3.3-.8-.1-1-1.7-.6-2.6-1.9-2.5-2.7.1-.5.8-.8 1.5-1.1.4-.2.4-.7.1-.9-.4-.3-1-.5-1.6-.7V7.3C16.2 4.8 14.6 3 12 3Z'
-    ],
-    x: ['M4 4l16 16', 'M20 4 4 20'],
-    whatsapp: [
-      'M3 21l1.65-3.8a9 9 0 1 1 3.4 2.9L3 21',
-      'M9 10a.5.5 0 0 0 1 0V9a.5.5 0 0 0-1 0v1a5 5 0 0 0 5 5h1a.5.5 0 0 0 0-1h-1a.5.5 0 0 0 0 1'
-    ]
+  const pathByPlatform = {
+    instagram:
+      'M7.75 2h8.5A5.75 5.75 0 0 1 22 7.75v8.5A5.75 5.75 0 0 1 16.25 22h-8.5A5.75 5.75 0 0 1 2 16.25v-8.5A5.75 5.75 0 0 1 7.75 2Zm0 1.8A3.95 3.95 0 0 0 3.8 7.75v8.5a3.95 3.95 0 0 0 3.95 3.95h8.5a3.95 3.95 0 0 0 3.95-3.95v-8.5a3.95 3.95 0 0 0-3.95-3.95h-8.5Zm9.65 1.9a1.15 1.15 0 1 1 0 2.3 1.15 1.15 0 0 1 0-2.3ZM12 6.85A5.15 5.15 0 1 1 6.85 12 5.15 5.15 0 0 1 12 6.85Zm0 1.8A3.35 3.35 0 1 0 15.35 12 3.35 3.35 0 0 0 12 8.65Z',
+    tiktok:
+      'M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-2.88 2.5 2.89 2.89 0 0 1-2.89-2.89 2.89 2.89 0 0 1 2.89-2.89c.28 0 .54.04.79.1v-3.5a6.37 6.37 0 0 0-.79-.05A6.34 6.34 0 0 0 3.15 15.3 6.34 6.34 0 0 0 9.49 21.64a6.34 6.34 0 0 0 6.34-6.34V8.69a8.16 8.16 0 0 0 4.76 1.52v-3.4a4.85 4.85 0 0 1-1-.12Z',
+    snapchat:
+      'M12.2 2c2.87 0 5.14 1.85 5.14 5.25 0 .64-.08 1.3-.15 1.85.37-.04.74-.04 1.07.09.52.2.82.64.82 1.11 0 .62-.54 1.12-1.2 1.3-.47.13-.77.31-.85.56-.1.33.05.78.4 1.24.75.99 1.72 1.66 2.66 1.93.41.12.66.44.66.81 0 .44-.39.84-1.08 1.05-.42.13-.91.22-1.38.28-.14.02-.22.14-.26.35-.08.37-.24.71-.52.9-.31.21-.73.24-1.15.17-.5-.09-1.05-.21-1.7-.21-.84 0-1.46.32-2.06.71-.61.4-1.23.75-2.05.75-.82 0-1.44-.35-2.05-.75-.6-.39-1.22-.71-2.06-.71-.65 0-1.2.12-1.7.21-.42.07-.84.04-1.15-.17-.28-.19-.44-.53-.52-.9-.04-.21-.12-.33-.26-.35-.47-.06-.96-.15-1.38-.28-.69-.21-1.08-.61-1.08-1.05 0-.37.25-.69.66-.81.94-.27 1.91-.94 2.66-1.93.35-.46.5-.91.4-1.24-.08-.25-.38-.43-.85-.56-.66-.18-1.2-.68-1.2-1.3 0-.47.3-.91.82-1.11.33-.13.7-.13 1.07-.09-.07-.55-.15-1.21-.15-1.85C6.86 3.85 9.13 2 12 2h.2Z',
+    x: 'M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z',
+    whatsapp:
+      'M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2.05 22l5.25-1.38c1.45.79 3.08 1.21 4.74 1.21 5.46 0 9.91-4.45 9.91-9.91 0-2.65-1.03-5.14-2.9-7.01A9.816 9.816 0 0 0 12.04 2Zm5.82 14.08c-.24.68-1.41 1.3-1.95 1.38-.5.07-1.13.1-1.82-.12-.42-.13-.96-.31-1.65-.61-2.9-1.25-4.79-4.18-4.94-4.38-.14-.19-1.18-1.57-1.18-2.99 0-1.42.74-2.12 1.01-2.41.26-.29.58-.36.77-.36.19 0 .39 0 .56.01.18.01.42-.07.66.5.24.59.82 2.02.89 2.17.07.15.12.32.02.51-.09.19-.14.31-.29.48-.14.17-.3.38-.43.51-.14.15-.29.31-.13.6.17.29.74 1.22 1.59 1.98 1.09.97 2.01 1.27 2.3 1.42.29.14.46.12.63-.07.17-.19.72-.84.91-1.13.19-.29.39-.24.65-.14.26.1 1.68.79 1.97.94.29.14.48.22.55.34.07.12.07.7-.17 1.38Z'
   };
 
-  (pathsByPlatform[platform] || pathsByPlatform.x).forEach((d) => {
-    const p = document.createElementNS(ns, 'path');
-    p.setAttribute('d', d);
-    svg.appendChild(p);
-  });
-
+  const p = document.createElementNS(ns, 'path');
+  p.setAttribute('d', pathByPlatform[platform] || pathByPlatform.x);
+  svg.appendChild(p);
   return svg;
 }
 
@@ -253,24 +240,34 @@ function renderFooterSocialLinks() {
   const container = document.getElementById('footer-social');
   if (!container) return;
 
-  const activeAccounts = MirkabStore.getSocialAccounts();
-  if (!activeAccounts.length) {
-    container.replaceChildren();
-    container.hidden = true;
-    return;
-  }
+  const allAccounts = MirkabStore.getSocialAccounts({ includeInactive: true });
+  const unlinkedLabelSuffix = state.lang === 'en' ? 'Coming soon' : 'قريباً';
 
   const frag = document.createDocumentFragment();
-  activeAccounts.forEach((account) => {
+  allAccounts.forEach((account) => {
     const label = account.label?.[state.lang] || account.label?.ar || account.id;
-    const link = createEl('a', 'footer-social-link');
-    link.href = account.url;
-    link.target = '_blank';
-    link.rel = 'noopener noreferrer';
-    link.setAttribute('aria-label', label);
-    link.title = label;
-    link.appendChild(createSocialSvgIcon(account.id));
-    frag.appendChild(link);
+    const isLinked = account.enabled && Boolean(account.url);
+
+    if (isLinked) {
+      const link = createEl('a', 'footer-social-link is-linked');
+      link.href = account.url;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.setAttribute('aria-label', label);
+      link.title = label;
+      link.dataset.platform = account.id;
+      link.appendChild(createSocialSvgIcon(account.id));
+      frag.appendChild(link);
+    } else {
+      const placeholder = createEl('span', 'footer-social-link is-unlinked');
+      placeholder.setAttribute('role', 'img');
+      placeholder.setAttribute('aria-disabled', 'true');
+      placeholder.setAttribute('aria-label', `${label} (${unlinkedLabelSuffix})`);
+      placeholder.title = `${label} — ${unlinkedLabelSuffix}`;
+      placeholder.dataset.platform = account.id;
+      placeholder.appendChild(createSocialSvgIcon(account.id));
+      frag.appendChild(placeholder);
+    }
   });
 
   container.replaceChildren(frag);
@@ -441,24 +438,8 @@ function applyResolvedProductImage(imgEl, stageEl, srcRef) {
   if (!imgEl || !stageEl) return;
   stageEl.classList.remove('is-fallback');
   if (!srcRef) {
-    stageEl.classList.add('is-fallback');
-    return;
-  }
-
-  if (isIndexedDbRef(srcRef)) {
     imgEl.removeAttribute('src');
-    MirkabMediaDB.resolveImageUrl(srcRef)
-      .then((resolvedUrl) => {
-        if (!imgEl.isConnected) return;
-        if (resolvedUrl) {
-          imgEl.src = resolvedUrl;
-        } else {
-          stageEl.classList.add('is-fallback');
-        }
-      })
-      .catch(() => {
-        if (stageEl.isConnected) stageEl.classList.add('is-fallback');
-      });
+    stageEl.classList.add('is-fallback');
     return;
   }
 
@@ -971,15 +952,6 @@ function setupEvents() {
 
   window.addEventListener('hashchange', handleHashRoute);
 
-  window.addEventListener('storage', (e) => {
-    if (e.key === 'mirkab_catalog_override_v1' || e.key === 'mirkab_site_config_override_v1') {
-      applyLanguageBindings();
-      renderCategoryFilterBar();
-      renderProducts(true);
-      renderFooterSocialLinks();
-    }
-  });
-
   if ('IntersectionObserver' in window) {
     const navObserver = new IntersectionObserver(
       (entries) => {
@@ -999,15 +971,26 @@ function setupEvents() {
   }
 }
 
-function initApp() {
+async function initApp() {
   evaluateMotionCapabilities();
   initScrollReveal();
+  init3DHeroIntegration();
+
+  // عرض الأيقونات والإعدادات المبدئية فوراً ثم التحديث بالبيانات الحية من Supabase
+  applyLanguageBindings();
+  renderFooterSocialLinks();
+  setupEvents();
+
+  try {
+    await MirkabStore.loadPublicData();
+  } catch (err) {
+    console.error('Supabase public fetch error:', err);
+  }
+
   applyLanguageBindings();
   renderCategoryFilterBar();
   renderProducts();
   renderFooterSocialLinks();
-  setupEvents();
-  init3DHeroIntegration();
   handleHashRoute();
 }
 

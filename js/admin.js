@@ -1,20 +1,23 @@
 /**
- * مِركاب | MIRKAB — محرك لوحة التحكم الإدارية الخاصة
+ * مِركاب | MIRKAB — محرك لوحة التحكم الإدارية الخاصة (Supabase)
  * --------------------------------------------------------------------------
- * واجهة إدارية مستقلة تماماً عن الموقع العام، محجوبة خلف شاشة دخول محلية،
- * تدير المنتجات (localStorage)، الصور (IndexedDB)، روابط Amazon.sa،
- * حسابات التواصل الاجتماعي، إعدادات الهوية، والنسخ الاحتياطي الكامل.
+ * واجهة إدارية مستقلة تماماً عن الموقع العام، محجوبة خلف مصادقة Supabase Auth
+ * المقيّدة بحساب المالك فقط (SUPABASE_OWNER_UID)، وتدير:
+ *   - المنتجات (`public.products`)
+ *   - إعدادات الموقع وحسابات التواصل (`public.site_settings`)
+ *   - الصور (`Supabase Storage bucket: product-images`)
+ *   - النسخ الاحتياطي والاستعادة الكاملة (JSON)
  */
 
 import { AdminAuth } from './admin-auth.js';
 import { MirkabStore, sanitizeHttpsUrl } from '../data/store-adapter.js';
-import { MirkabMediaDB, isIndexedDbRef } from '../data/media-db.js';
+import { MirkabMediaDB, extractStoragePathFromUrl } from '../data/media-db.js';
 
 const SECTION_TITLES = {
   dashboard: '1. الرئيسية',
   products: '2. إدارة المنتجات',
   'product-form': '3. إضافة / تعديل منتج',
-  media: '4. إدارة الصور (IndexedDB)',
+  media: '4. إدارة الصور (Supabase Storage)',
   'amazon-links': '5. إدارة روابط Amazon',
   social: '6. حسابات التواصل الاجتماعي',
   settings: '7. إعدادات الموقع والأمان',
@@ -70,15 +73,6 @@ function bindPreviewImage(imgEl, srcRef) {
   if (!imgEl) return;
   if (!srcRef) {
     imgEl.removeAttribute('src');
-    return;
-  }
-  if (isIndexedDbRef(srcRef)) {
-    imgEl.removeAttribute('src');
-    MirkabMediaDB.resolveImageUrl(srcRef)
-      .then((url) => {
-        if (imgEl.isConnected && url) imgEl.src = url;
-      })
-      .catch(() => {});
     return;
   }
   imgEl.src = resolveAdminPreviewPath(srcRef);
@@ -193,12 +187,40 @@ function lockAdminInterface() {
   renderAuthGateState();
 }
 
-function unlockAdminInterface() {
+async function unlockAdminInterface() {
   if (!AdminAuth.isAuthenticated()) return;
   const loginScreen = document.getElementById('admin-login-screen');
   const shell = document.getElementById('admin-shell');
+  const workspace = document.getElementById('admin-workspace');
   if (loginScreen) loginScreen.hidden = true;
   if (shell) shell.hidden = false;
+
+  if (workspace) {
+    const loadingPanel = createEl('section', 'panel');
+    loadingPanel.append(
+      createEl('h3', 'panel-title', 'جاري مزامنة بيانات Supabase...'),
+      createEl('p', 'panel-subtitle', 'يتم جلب المنتجات والصور والإعدادات وتهيئة العناصر الأساسية عند الحاجة.')
+    );
+    workspace.replaceChildren(loadingPanel);
+  }
+
+  try {
+    const res = await MirkabStore.loadAdminData();
+    if (res?.seeded) {
+      showToast('تمت مزامنة المنتجات الأساسية الـ 11 والصور مع Supabase تلقائياً.');
+    }
+  } catch (err) {
+    showToast('تعذر تحميل البيانات من Supabase. تحقق من الاتصال وسياسات RLS.');
+    if (workspace) {
+      const errPanel = createEl('section', 'panel');
+      errPanel.append(
+        createEl('h3', 'panel-title', 'تعذر الاتصال بقاعدة البيانات'),
+        createEl('p', 'panel-subtitle', err?.message || 'حدث خطأ غير متوقع أثناء جلب البيانات من Supabase.')
+      );
+      workspace.replaceChildren(errPanel);
+    }
+    return;
+  }
 
   const cfg = MirkabStore.getSiteConfig();
   const brandLabel = document.getElementById('sidebar-brand-name');
@@ -210,12 +232,9 @@ function unlockAdminInterface() {
 }
 
 function renderAuthGateState() {
-  const isConfigured = AdminAuth.hasConfiguredPassphrase();
   const subtitle = document.getElementById('auth-subtitle');
-  const confirmWrap = document.getElementById('auth-confirm-wrap');
-  const confirmInput = document.getElementById('auth-passphrase-confirm');
-  const passInput = document.getElementById('auth-passphrase');
-  const passLabel = document.getElementById('auth-pass-label');
+  const emailInput = document.getElementById('auth-email');
+  const passInput = document.getElementById('auth-password');
   const submitBtn = document.getElementById('auth-submit-btn');
   const errorEl = document.getElementById('auth-error');
 
@@ -223,60 +242,54 @@ function renderAuthGateState() {
     errorEl.hidden = true;
     errorEl.textContent = '';
   }
-  if (passInput) {
-    passInput.value = '';
-    passInput.setAttribute('autocomplete', isConfigured ? 'current-password' : 'new-password');
+  if (emailInput) emailInput.value = '';
+  if (passInput) passInput.value = '';
+  if (submitBtn) {
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'دخول إلى الإدارة';
   }
-  if (confirmInput) confirmInput.value = '';
-
-  if (isConfigured) {
-    if (subtitle) subtitle.textContent = 'أدخل رمز الدخول المحلي للوصول إلى لوحة إدارة المنتجات والصور والإعدادات.';
-    if (passLabel) passLabel.textContent = 'رمز الدخول المحلي';
-    if (confirmWrap) confirmWrap.hidden = true;
-    if (confirmInput) confirmInput.required = false;
-    if (submitBtn) submitBtn.textContent = 'دخول إلى الإدارة';
-  } else {
-    if (subtitle) {
-      subtitle.textContent =
-        'الإعداد الأولي للمالك: عيّن رمز دخول محلياً (6 أحرف على الأقل) لحفظه مشفّراً في متصفحك دون تضمين أي كلمة مرور في الكود.';
-    }
-    if (passLabel) passLabel.textContent = 'إنشاء رمز الدخول المحلي';
-    if (confirmWrap) confirmWrap.hidden = false;
-    if (confirmInput) confirmInput.required = true;
-    if (submitBtn) submitBtn.textContent = 'حفظ رمز الدخول والبدء';
+  if (subtitle) {
+    subtitle.textContent = 'سجّل الدخول بحساب المالك المعتمد عبر Supabase لإدارة المنتجات والصور والإعدادات.';
   }
 }
 
 function setupAuthForm() {
   const form = document.getElementById('auth-form');
-  const passInput = document.getElementById('auth-passphrase');
-  const confirmInput = document.getElementById('auth-passphrase-confirm');
+  const emailInput = document.getElementById('auth-email');
+  const passInput = document.getElementById('auth-password');
+  const submitBtn = document.getElementById('auth-submit-btn');
   const errorEl = document.getElementById('auth-error');
-  if (!form || !passInput || !errorEl) return;
+  if (!form || !emailInput || !passInput || !errorEl) return;
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     errorEl.hidden = true;
     errorEl.textContent = '';
 
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'جاري التحقق...';
+    }
+
     try {
-      if (AdminAuth.hasConfiguredPassphrase()) {
-        await AdminAuth.verifyAndSignIn(passInput.value);
-      } else {
-        await AdminAuth.setupInitialPassphrase(passInput.value, confirmInput?.value || '');
-      }
+      await AdminAuth.signInWithEmail(emailInput.value, passInput.value);
+      emailInput.value = '';
       passInput.value = '';
-      if (confirmInput) confirmInput.value = '';
-      unlockAdminInterface();
+      await unlockAdminInterface();
     } catch (err) {
       const code = err?.message || '';
       const messages = {
-        PASSPHRASE_TOO_SHORT: 'يجب أن يتكون رمز الدخول من 6 أحرف على الأقل.',
-        PASSPHRASE_MISMATCH: 'رمز الدخول وتأكيده غير متطابقين.',
-        INVALID_PASSPHRASE: 'رمز الدخول غير صحيح.'
+        MISSING_CREDENTIALS: 'يرجى إدخال البريد الإلكتروني وكلمة المرور.',
+        INVALID_CREDENTIALS: 'بيانات الدخول غير صحيحة أو غير مفعّلة في Supabase Auth.',
+        UNAUTHORIZED_NOT_OWNER: 'هذا الحساب غير مخوّل بإدارة هذا المتجر (مقصور على حساب المالك فقط).'
       };
-      errorEl.textContent = messages[code] || 'تعذر التحقق من رمز الدخول.';
+      errorEl.textContent = messages[code] || 'تعذر تسجيل الدخول عبر Supabase.';
       errorEl.hidden = false;
+    } finally {
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'دخول إلى الإدارة';
+      }
     }
   });
 }
@@ -357,13 +370,19 @@ async function renderDashboardSection(container) {
   const draftCount = products.length - publishedCount;
   const linkedAmazon = products.filter((p) => Boolean(sanitizeHttpsUrl(p.amazonUrl))).length;
   const activeSocial = MirkabStore.getSocialAccounts();
-  const mediaStats = await MirkabMediaDB.getStorageStats();
+  let mediaStats = { count: 0, totalBytes: 0 };
+  try {
+    mediaStats = await MirkabMediaDB.getStorageStats();
+  } catch {
+    mediaStats = { count: 0, totalBytes: 0 };
+  }
   const cfg = MirkabStore.getSiteConfig();
+  const ownerEmail = AdminAuth.getCurrentUser()?.email || '';
 
   const statsGrid = createEl('div', 'stats-grid');
   const cards = [
     {
-      label: 'إجمالي المنتجات',
+      label: 'إجمالي المنتجات (Supabase)',
       value: String(products.length),
       hint: `${publishedCount} منشور • ${draftCount} مسودة`
     },
@@ -373,14 +392,14 @@ async function renderDashboardSection(container) {
       hint: linkedAmazon === products.length ? 'جميع المنتجات مرتبطة' : `${products.length - linkedAmazon} منتج بانتظار الرابط`
     },
     {
-      label: 'الصور المرفوعة (IndexedDB)',
+      label: 'صور Storage (product-images)',
       value: String(mediaStats.count),
       hint: `الحجم المحفوظ: ${formatBytes(mediaStats.totalBytes)}`
     },
     {
-      label: 'حسابات التواصل الظاهرة',
+      label: 'حسابات التواصل المفعّلة',
       value: `${activeSocial.length} / 5`,
-      hint: activeSocial.length ? 'تظهر تلقائياً في تذييل الموقع' : 'لا توجد حسابات مفعّلة حالياً'
+      hint: 'تظهر الخمسة في التذييل وتتفعّل المربوطة فور الحفظ'
     }
   ];
 
@@ -399,7 +418,7 @@ async function renderDashboardSection(container) {
   const hWrap = createEl('div');
   hWrap.append(
     createEl('h3', 'panel-title', `مركز تشغيل ${cfg.brand.ar} | ${cfg.brand.en}`),
-    createEl('p', 'panel-subtitle', 'جميع التعديلات تُحفظ محلياً في المتصفح وتنعكس فوراً على الموقع العام دون المساس بالتصميم.')
+    createEl('p', 'panel-subtitle', 'جميع التعديلات تُحفظ مباشرة في Supabase (Postgres + Storage) وتنعكس فوراً للزوار دون أي تعديل على التصميم.')
   );
   header.appendChild(hWrap);
 
@@ -423,11 +442,11 @@ async function renderDashboardSection(container) {
 
   const infoPanel = createEl('section', 'panel');
   infoPanel.append(
-    createEl('h3', 'panel-title', 'نطاق التخزين والخصوصية'),
+    createEl('h3', 'panel-title', 'حالة الربط والحماية عبر Supabase'),
     createEl(
       'p',
       'panel-subtitle',
-      'يُحفظ كتالوج المنتجات وإعدادات الموقع في localStorage وتُحفظ الصور المرفوعة في IndexedDB على هذا المتصفح. لتأمين نسخة محمولة من بياناتك وصورك أو نقلها لجهاز آخر، استخدم قسم «النسخ الاحتياطي» بانتظام.'
+      `متصل بحساب المالك${ownerEmail ? ` (${ownerEmail})` : ''}. جميع الجداول (products, site_settings) وحاوية الصور (product-images) محمية بسياسات RLS ولا يمكن تعديلها إلا من هذه الجلسة المصادق عليها.`
     )
   );
 
@@ -538,18 +557,32 @@ function renderProductsSection(container) {
         upBtn.type = 'button';
         upBtn.title = 'تقديم للأعلى';
         upBtn.disabled = idx === 0;
-        upBtn.addEventListener('click', () => {
-          MirkabStore.moveProductOrder(product.id, 'up');
-          renderTableBody();
+        upBtn.addEventListener('click', async () => {
+          if (!requireAdminAuth()) return;
+          upBtn.disabled = true;
+          try {
+            await MirkabStore.moveProductOrder(product.id, 'up');
+            renderTableBody();
+          } catch {
+            showToast('تعذر تحديث الترتيب في Supabase.');
+            upBtn.disabled = false;
+          }
         });
 
         const downBtn = createEl('button', 'btn btn-surface btn-sm', '▼');
         downBtn.type = 'button';
         downBtn.title = 'تأخير للأسفل';
         downBtn.disabled = idx === filtered.length - 1;
-        downBtn.addEventListener('click', () => {
-          MirkabStore.moveProductOrder(product.id, 'down');
-          renderTableBody();
+        downBtn.addEventListener('click', async () => {
+          if (!requireAdminAuth()) return;
+          downBtn.disabled = true;
+          try {
+            await MirkabStore.moveProductOrder(product.id, 'down');
+            renderTableBody();
+          } catch {
+            showToast('تعذر تحديث الترتيب في Supabase.');
+            downBtn.disabled = false;
+          }
         });
         orderWrap.append(upBtn, downBtn);
       }
@@ -595,11 +628,17 @@ function renderProductsSection(container) {
       );
       toggleStatusBtn.type = 'button';
       toggleStatusBtn.title = 'انقر لتبديل الظهور في الموقع العام';
-      toggleStatusBtn.addEventListener('click', () => {
+      toggleStatusBtn.addEventListener('click', async () => {
         if (!requireAdminAuth()) return;
-        const updated = MirkabStore.toggleProductStatus(product.id);
-        showToast(updated?.status === 'published' ? 'تم نشر المنتج في الموقع العام.' : 'تم تحويل المنتج إلى مسودة وإخفاؤه.');
-        renderTableBody();
+        toggleStatusBtn.disabled = true;
+        try {
+          const updated = await MirkabStore.toggleProductStatus(product.id);
+          showToast(updated?.status === 'published' ? 'تم نشر المنتج في الموقع العام.' : 'تم تحويل المنتج إلى مسودة وإخفاؤه.');
+          renderTableBody();
+        } catch {
+          showToast('تعذر تغيير حالة المنتج في Supabase.');
+          toggleStatusBtn.disabled = false;
+        }
       });
       statusTd.appendChild(toggleStatusBtn);
 
@@ -619,26 +658,43 @@ function renderProductsSection(container) {
         if (!requireAdminAuth()) return;
         const confirmed = await askConfirmation(
           'تأكيد حذف المنتج',
-          `هل أنت متأكد من حذف «${product.ar.name}»؟ لا يمكن التراجع عن هذا الحذف إلا عبر النسخة الاحتياطية.`
+          `هل أنت متأكد من حذف «${product.ar.name}» من قاعدة بيانات Supabase؟ لا يمكن التراجع عن هذا الحذف إلا عبر النسخة الاحتياطية.`
         );
         if (!confirmed) return;
 
-        const refsToCheck = [product.image, ...(product.gallery || [])].filter(isIndexedDbRef);
-        MirkabStore.deleteProduct(product.id);
+        delBtn.disabled = true;
+        try {
+          const storagePathsToCheck = [product.image, ...(product.gallery || [])]
+            .map(extractStoragePathFromUrl)
+            .filter((p) => p && !p.startsWith('defaults/'));
 
-        // تنظيف صور IndexedDB غير المستخدمة في منتجات أخرى
-        const remainingRefs = new Set();
-        MirkabStore.getProducts({ includeDrafts: true }).forEach((item) => {
-          [item.image, ...(item.gallery || [])].forEach((r) => remainingRefs.add(r));
-        });
-        for (const ref of refsToCheck) {
-          if (!remainingRefs.has(ref)) {
-            await MirkabMediaDB.deleteImage(ref);
+          await MirkabStore.deleteProduct(product.id);
+
+          // تنظيف صور Supabase Storage المرفوعة غير المستخدمة في منتجات أخرى
+          const remainingPaths = new Set();
+          MirkabStore.getProducts({ includeDrafts: true }).forEach((item) => {
+            [item.image, ...(item.gallery || [])].forEach((r) => {
+              const p = extractStoragePathFromUrl(r);
+              if (p) remainingPaths.add(p);
+            });
+          });
+
+          for (const path of storagePathsToCheck) {
+            if (!remainingPaths.has(path)) {
+              try {
+                await MirkabMediaDB.deleteImage(path);
+              } catch {
+                // تجاهل فشل حذف صورة فرعية دون إيقاف الحذف
+              }
+            }
           }
-        }
 
-        showToast('تم حذف المنتج بنجاح.');
-        renderTableBody();
+          showToast('تم حذف المنتج بنجاح من Supabase.');
+          renderTableBody();
+        } catch {
+          showToast('تعذر حذف المنتج من Supabase.');
+          delBtn.disabled = false;
+        }
       });
 
       actWrap.append(editBtn, delBtn);
@@ -852,7 +908,7 @@ function renderProductFormSection(container) {
 
   // قسم رفع ومعاينة الصورة الرئيسية
   const mainMediaField = createEl('div', 'form-field is-full');
-  mainMediaField.appendChild(createEl('span', 'field-label', 'الصورة الرئيسية للمنتج (تُحفظ في IndexedDB عند الرفع من جهازك)'));
+  mainMediaField.appendChild(createEl('span', 'field-label', 'الصورة الرئيسية للمنتج (تُرفع إلى Supabase Storage: product-images)'));
   const mainStage = createEl('div', 'upload-stage');
   const mainPreviewBox = createEl('div', 'preview-main-box');
   const mainPreviewImg = document.createElement('img');
@@ -1095,20 +1151,19 @@ function renderProductFormSection(container) {
         }
       };
 
-      MirkabStore.upsertProduct(payload, existing ? existing.id : '');
+      await MirkabStore.upsertProduct(payload, existing ? existing.id : '');
       revokeDraftMediaUrls();
       adminState.editingProductId = '';
-      showToast(isEdit ? 'تم حفظ تعديلات المنتج بنجاح.' : 'تم إضافة المنتج وحفظه بنجاح.');
+      showToast(isEdit ? 'تم حفظ تعديلات المنتج في Supabase بنجاح.' : 'تم إضافة المنتج وحفظه في Supabase بنجاح.');
       navigateToSection('products');
     } catch (err) {
       const code = err?.message || '';
       const errorMap = {
         DUPLICATE_PRODUCT_ID: 'معرّف المنتج مستخدم بالفعل لمنتج آخر. اختر معرفاً مختلفاً.',
         UNSUPPORTED_IMAGE_TYPE: 'صيغة الصورة غير مدعومة (استخدم JPG أو PNG أو WebP).',
-        FILE_TOO_LARGE: 'حجم الصورة يتجاوز الحد الأقصى المسموح (12 MB).',
-        LOCALSTORAGE_WRITE_FAILED: 'تعذر الكتابة إلى التخزين المحلي للمتصفح (تحقق من المساحة المتاحة).'
+        FILE_TOO_LARGE: 'حجم الصورة يتجاوز الحد الأقصى المسموح (12 MB).'
       };
-      formError.textContent = errorMap[code] || 'حدث خطأ أثناء حفظ المنتج أو معالجة صوره.';
+      formError.textContent = errorMap[code] || 'حدث خطأ أثناء حفظ المنتج أو رفع صوره إلى Supabase.';
       formError.hidden = false;
     } finally {
       saveBtn.disabled = false;
@@ -1121,33 +1176,34 @@ function renderProductFormSection(container) {
 }
 
 /* ==========================================================================
-   4. إدارة الصور (IndexedDB Upload + Preview + Product Binding + Cleanup)
+   4. إدارة الصور (Supabase Storage Upload + Preview + Product Binding + Cleanup)
    ========================================================================== */
 async function renderMediaSection(container) {
   clearMediaUploadDraft();
   const products = MirkabStore.getProducts({ includeDrafts: true });
   const storedImages = await MirkabMediaDB.listImages();
-  const stats = await MirkabMediaDB.getStorageStats();
+  const stats = {
+    count: storedImages.length,
+    totalBytes: storedImages.reduce((sum, item) => sum + (Number(item.size) || 0), 0)
+  };
 
-  // اللوحة 1: رفع صورة من الجهاز وربطها مباشرة بمنتج
+  // اللوحة 1: رفع صورة من الجهاز إلى Supabase Storage وربطها بمنتج
   const uploadPanel = createEl('section', 'panel');
   const uploadHeader = createEl('div', 'panel-header');
   const uhWrap = createEl('div');
   uhWrap.append(
-    createEl('h3', 'panel-title', 'رفع صورة جديدة وحفظها في IndexedDB'),
+    createEl('h3', 'panel-title', 'رفع صورة جديدة إلى Supabase Storage (product-images)'),
     createEl(
       'p',
       'panel-subtitle',
-      `الصور المحفوظة محلياً: ${stats.count} (${formatBytes(stats.totalBytes)})${
-        stats.quotaBytes ? ` • سعة المتصفح المقدرة: ${formatBytes(stats.quotaBytes)}` : ''
-      }`
+      `الملفات المحفوظة في حاوية الصور: ${stats.count} (${formatBytes(stats.totalBytes)})`
     )
   );
   uploadHeader.appendChild(uhWrap);
 
   const uploadGrid = createEl('div', 'form-grid');
   const previewBox = createEl('div', 'preview-main-box');
-  previewBox.appendChild(createEl('span', '', 'معاينة الصورة قبل الحفظ'));
+  previewBox.appendChild(createEl('span', '', 'معاينة الصورة قبل الرفع'));
 
   const fileInput = document.createElement('input');
   fileInput.type = 'file';
@@ -1157,7 +1213,7 @@ async function renderMediaSection(container) {
     clearMediaUploadDraft();
     const file = fileInput.files?.[0];
     if (!file) {
-      previewBox.replaceChildren(createEl('span', '', 'معاينة الصورة قبل الحفظ'));
+      previewBox.replaceChildren(createEl('span', '', 'معاينة الصورة قبل الرفع'));
       return;
     }
     adminState.mediaUploadDraft.file = file;
@@ -1177,7 +1233,7 @@ async function renderMediaSection(container) {
     new Option('إضافة إلى الصور الإضافية للمنتج', 'gallery')
   );
 
-  const saveMediaBtn = createEl('button', 'btn btn-primary', 'حفظ الصورة وربطها بالمنتج');
+  const saveMediaBtn = createEl('button', 'btn btn-primary', 'رفع الصورة وربطها بالمنتج');
   saveMediaBtn.type = 'button';
   saveMediaBtn.addEventListener('click', async () => {
     if (!requireAdminAuth()) return;
@@ -1192,6 +1248,7 @@ async function renderMediaSection(container) {
     }
 
     saveMediaBtn.disabled = true;
+    saveMediaBtn.textContent = 'جاري الرفع...';
     try {
       const saved = await MirkabMediaDB.saveImageFile(adminState.mediaUploadDraft.file, {
         productId: targetProduct.id,
@@ -1205,14 +1262,15 @@ async function renderMediaSection(container) {
         updated.gallery = [...(updated.gallery || []), saved.ref];
       }
 
-      MirkabStore.upsertProduct(updated, updated.id);
+      await MirkabStore.upsertProduct(updated, updated.id);
       clearMediaUploadDraft();
-      showToast('تم حفظ الصورة في IndexedDB وربطها بالمنتج.');
+      showToast('تم رفع الصورة إلى Supabase Storage وربطها بالمنتج.');
       await renderMediaSection(container);
     } catch {
-      showToast('تعذر حفظ الصورة. تأكد من الصيغة وحجم الملف.');
+      showToast('تعذر رفع الصورة. تأكد من الصيغة وحجم الملف وصلاحية الجلسة.');
     } finally {
       saveMediaBtn.disabled = false;
+      saveMediaBtn.textContent = 'رفع الصورة وربطها بالمنتج';
     }
   });
 
@@ -1230,13 +1288,13 @@ async function renderMediaSection(container) {
   uploadGrid.append(previewBox, controlsCol);
   uploadPanel.append(uploadHeader, uploadGrid);
 
-  // اللوحة 2: استعراض الصور المرفوعة في IndexedDB
+  // اللوحة 2: استعراض الصور المحفوظة في Supabase Storage
   const galleryPanel = createEl('section', 'panel');
-  galleryPanel.appendChild(createEl('h3', 'panel-title', `مكتبة الصور المحفوظة في IndexedDB (${storedImages.length})`));
+  galleryPanel.appendChild(createEl('h3', 'panel-title', `مكتبة الصور في Supabase Storage (${storedImages.length})`));
 
   if (!storedImages.length) {
     galleryPanel.appendChild(
-      createEl('p', 'panel-subtitle', 'لا توجد صور مرفوعة بعد في IndexedDB. جميع المنتجات تستخدم حالياً صورها الافتراضية، ويمكنك رفع واستبدال أي صورة من النموذج أعلاه.')
+      createEl('p', 'panel-subtitle', 'لا توجد صور مرفوعة بعد في حاوية product-images. استخدم زر «مزامنة وتهيئة البيانات» أو ارفع صورة جديدة أعلاه.')
     );
   } else {
     const cardsGrid = createEl('div', 'media-cards-grid');
@@ -1244,7 +1302,7 @@ async function renderMediaSection(container) {
       const card = createEl('article', 'media-card');
       const img = document.createElement('img');
       img.className = 'media-card-img';
-      img.alt = imgRec.name || imgRec.id;
+      img.alt = imgRec.name || imgRec.path;
       bindPreviewImage(img, imgRec.ref);
 
       const linkedProduct = products.find(
@@ -1253,8 +1311,8 @@ async function renderMediaSection(container) {
 
       const body = createEl('div', 'media-card-body');
       body.append(
-        createEl('strong', '', imgRec.name || imgRec.id),
-        createEl('span', 'field-hint', `${formatBytes(imgRec.size)}${imgRec.width ? ` • ${imgRec.width}×${imgRec.height}` : ''}`),
+        createEl('strong', '', imgRec.name || imgRec.path),
+        createEl('span', 'field-hint', `${formatBytes(imgRec.size)} • ${imgRec.path}`),
         createEl('span', 'badge', linkedProduct ? `مرتبطة بـ: ${linkedProduct.ar.name}` : 'غير مرتبطة بمنتج')
       );
 
@@ -1263,24 +1321,29 @@ async function renderMediaSection(container) {
       delBtn.addEventListener('click', async () => {
         if (!requireAdminAuth()) return;
         const ok = await askConfirmation(
-          'حذف صورة من IndexedDB',
-          'هل تريد حذف هذه الصورة؟ سيتم فصلها تلقائياً عن أي منتج مرتبط بها.'
+          'حذف صورة من Supabase Storage',
+          'هل تريد حذف هذه الصورة نهائياً من حاوية product-images؟ سيتم فصلها تلقائياً عن أي منتج مرتبط بها.'
         );
         if (!ok) return;
 
-        // فك الارتباط من المنتجات (مع الحفاظ على صورة احتياطية إن كانت رئيسية إذا توفرت في gallery)
-        products.forEach((p) => {
-          const inGallery = (p.gallery || []).includes(imgRec.ref);
-          const isMain = p.image === imgRec.ref;
-          if (!inGallery && !isMain) return;
-          const nextGallery = (p.gallery || []).filter((r) => r !== imgRec.ref);
-          const nextMain = isMain ? (nextGallery.shift() || './assets/images/products/prod-thermal-sunshade.jpg') : p.image;
-          MirkabStore.upsertProduct({ ...p, image: nextMain, gallery: nextGallery }, p.id);
-        });
+        delBtn.disabled = true;
+        try {
+          for (const p of products) {
+            const inGallery = (p.gallery || []).includes(imgRec.ref);
+            const isMain = p.image === imgRec.ref;
+            if (!inGallery && !isMain) continue;
+            const nextGallery = (p.gallery || []).filter((r) => r !== imgRec.ref);
+            const nextMain = isMain ? (nextGallery.shift() || './assets/images/products/prod-thermal-sunshade.jpg') : p.image;
+            await MirkabStore.upsertProduct({ ...p, image: nextMain, gallery: nextGallery }, p.id);
+          }
 
-        await MirkabMediaDB.deleteImage(imgRec.ref);
-        showToast('تم حذف الصورة وفك ارتباطها.');
-        await renderMediaSection(container);
+          await MirkabMediaDB.deleteImage(imgRec.path);
+          showToast('تم حذف الصورة وفك ارتباطها من Supabase.');
+          await renderMediaSection(container);
+        } catch {
+          showToast('تعذر حذف الصورة من Storage.');
+          delBtn.disabled = false;
+        }
       });
 
       body.appendChild(delBtn);
@@ -1384,29 +1447,40 @@ function renderAmazonLinksSection(container) {
 
     const saveRowBtn = createEl('button', 'btn btn-silver btn-sm', 'حفظ');
     saveRowBtn.type = 'button';
-    saveRowBtn.addEventListener('click', () => {
+    saveRowBtn.addEventListener('click', async () => {
       if (!requireAdminAuth()) return;
+      saveRowBtn.disabled = true;
       try {
-        MirkabStore.updateProductAmazonAndPrice(p.id, {
+        await MirkabStore.updateProductAmazonAndPrice(p.id, {
           amazonUrl: urlIn.value,
           price: priceIn.value.trim()
         });
-        showToast(`تم حفظ رابط وسعر «${p.ar.name}».`);
+        showToast(`تم حفظ رابط وسعر «${p.ar.name}» في Supabase.`);
       } catch {
-        showToast('الرابط غير صالح؛ يجب إدخال رابط Amazon.sa يبدأ بـ https:// أو تركه فارغاً.');
+        showToast('الرابط غير صالح أو تعذر الحفظ؛ يجب إدخال رابط Amazon.sa يبدأ بـ https:// أو تركه فارغاً.');
+      } finally {
+        saveRowBtn.disabled = false;
       }
     });
 
     const clearRowBtn = createEl('button', 'btn btn-surface btn-sm', 'مسح الرابط');
     clearRowBtn.type = 'button';
-    clearRowBtn.addEventListener('click', () => {
+    clearRowBtn.addEventListener('click', async () => {
       if (!requireAdminAuth()) return;
+      clearRowBtn.disabled = true;
       urlIn.value = '';
-      MirkabStore.updateProductAmazonAndPrice(p.id, {
-        amazonUrl: '',
-        price: priceIn.value.trim()
-      });
-      showToast(`تمت إزالة رابط Amazon لـ «${p.ar.name}».`);
+      try {
+        await MirkabStore.updateProductAmazonAndPrice(p.id, {
+          amazonUrl: '',
+          price: priceIn.value.trim()
+        });
+        syncOpenBtn();
+        showToast(`تمت إزالة رابط Amazon لـ «${p.ar.name}».`);
+      } catch {
+        showToast('تعذر تحديث المنتج في Supabase.');
+      } finally {
+        clearRowBtn.disabled = false;
+      }
     });
 
     const openLink = createEl('a', 'btn btn-surface btn-sm', 'اختبار');
@@ -1449,7 +1523,7 @@ function renderSocialSection(container) {
   const hWrap = createEl('div');
   hWrap.append(
     createEl('h3', 'panel-title', 'إدارة حسابات التواصل الاجتماعي'),
-    createEl('p', 'panel-subtitle', 'تظهر الحسابات المفعّلة ذات الروابط الصحيحة فقط في تذييل الموقع العام، وتُخفى الحسابات الفارغة أو المعطّلة تلقائياً.')
+    createEl('p', 'panel-subtitle', 'تظهر الأيقونات الخمس دائماً في تذييل الموقع العام، وتصبح قابلة للنقر فقط عند إضافة رابط HTTPS صحيح وتفعيل الحساب هنا.')
   );
   header.appendChild(hWrap);
 
@@ -1477,7 +1551,7 @@ function renderSocialSection(container) {
     const statusBadge = createEl(
       'span',
       `badge ${isVisible ? 'is-published' : ''}`.trim(),
-      isVisible ? 'ظاهر في التذييل' : (acc.url ? 'مخفي يدوياً' : 'فارغ — لن يظهر')
+      isVisible ? 'مفعّل وقابل للنقر' : (acc.url ? 'مخفي يدوياً (غير قابل للنقر)' : 'فارغ (غير قابل للنقر)')
     );
     titleWrap.appendChild(statusBadge);
 
@@ -1485,7 +1559,7 @@ function renderSocialSection(container) {
     const checkbox = document.createElement('input');
     checkbox.type = 'checkbox';
     checkbox.checked = acc.enabled !== false;
-    toggleLabel.append(checkbox, createEl('span', '', 'تفعيل الظهور في الموقع العام'));
+    toggleLabel.append(checkbox, createEl('span', '', 'تفعيل الرابط في الموقع العام'));
 
     top.append(titleWrap, toggleLabel);
 
@@ -1507,7 +1581,7 @@ function renderSocialSection(container) {
       const valid = Boolean(sanitizeHttpsUrl(urlInput.value));
       const active = checkbox.checked && valid;
       statusBadge.className = `badge ${active ? 'is-published' : ''}`.trim();
-      statusBadge.textContent = active ? 'ظاهر في التذييل' : (valid ? 'مخفي يدوياً' : 'فارغ — لن يظهر');
+      statusBadge.textContent = active ? 'مفعّل وقابل للنقر' : (valid ? 'مخفي يدوياً (غير قابل للنقر)' : 'فارغ (غير قابل للنقر)');
     }
 
     urlInput.addEventListener('input', syncStatusBadge);
@@ -1523,14 +1597,14 @@ function renderSocialSection(container) {
   const errorEl = createEl('p', 'form-error');
   errorEl.hidden = true;
 
-  const saveBtn = createEl('button', 'btn btn-primary', 'حفظ حسابات التواصل');
+  const saveBtn = createEl('button', 'btn btn-primary', 'حفظ حسابات التواصل في Supabase');
   saveBtn.type = 'submit';
   const actionsRow = createEl('div', 'toolbar-row');
   actionsRow.appendChild(saveBtn);
 
   form.append(errorEl, actionsRow);
 
-  form.addEventListener('submit', (e) => {
+  form.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (!requireAdminAuth()) return;
     errorEl.hidden = true;
@@ -1544,13 +1618,17 @@ function renderSocialSection(container) {
       };
     });
 
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'جاري الحفظ...';
     try {
-      MirkabStore.saveSocialAccounts(updates);
-      showToast('تم حفظ حسابات التواصل الاجتماعي بنجاح.');
+      await MirkabStore.saveSocialAccounts(updates);
+      showToast('تم حفظ حسابات التواصل الاجتماعي في Supabase بنجاح.');
       renderSocialSection(container);
-    } catch (err) {
+    } catch {
       errorEl.textContent = 'تأكد من كتابة الروابط بصيغة HTTPS صحيحة (أو ترك الحقل فارغاً لإزالته).';
       errorEl.hidden = false;
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'حفظ حسابات التواصل في Supabase';
     }
   });
 
@@ -1559,7 +1637,7 @@ function renderSocialSection(container) {
 }
 
 /* ==========================================================================
-   7. إعدادات الموقع وتغيير رمز الدخول المحلي
+   7. إعدادات الموقع وتغيير كلمة مرور حساب المالك عبر Supabase Auth
    ========================================================================== */
 function renderSettingsSection(container) {
   const cfg = MirkabStore.getSiteConfig();
@@ -1570,7 +1648,7 @@ function renderSettingsSection(container) {
   const bhWrap = createEl('div');
   bhWrap.append(
     createEl('h3', 'panel-title', 'إعدادات العلامة التجارية والنصوص العامة'),
-    createEl('p', 'panel-subtitle', 'عدّل اسم العلامة التجارية والشعار النصي وبيانات SEO ونص الإفصاح.')
+    createEl('p', 'panel-subtitle', 'عدّل اسم العلامة التجارية والشعار النصي وبيانات SEO ونص الإفصاح في Supabase.')
   );
   const resetCfgBtn = createEl('button', 'btn btn-surface btn-sm', 'استعادة الإعدادات الافتراضية');
   resetCfgBtn.type = 'button';
@@ -1581,9 +1659,20 @@ function renderSettingsSection(container) {
       'هل تريد إعادة اسم العلامة التجارية ونصوص الموقع إلى القيم الافتراضية دون المساس بالمنتجات أو الصور؟'
     );
     if (!ok) return;
-    MirkabStore.resetSiteConfigToDefault();
-    showToast('تمت استعادة الإعدادات الافتراضية للموقع.');
-    unlockAdminInterface();
+    resetCfgBtn.disabled = true;
+    try {
+      await MirkabStore.resetSiteConfigToDefault();
+      showToast('تمت استعادة الإعدادات الافتراضية في Supabase.');
+      const brandLabel = document.getElementById('sidebar-brand-name');
+      const refreshedCfg = MirkabStore.getSiteConfig();
+      if (brandLabel) {
+        brandLabel.textContent = `${refreshedCfg.brand.ar} ${refreshedCfg.brand.separator} ${refreshedCfg.brand.en}`;
+      }
+      renderSettingsSection(container);
+    } catch {
+      showToast('تعذر استعادة الإعدادات الافتراضية.');
+      resetCfgBtn.disabled = false;
+    }
   });
   brandHeader.append(bhWrap, resetCfgBtn);
 
@@ -1642,77 +1731,83 @@ function renderSettingsSection(container) {
     saveWrap
   );
 
-  form.addEventListener('submit', (e) => {
+  form.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (!requireAdminAuth()) return;
-    MirkabStore.saveSiteConfig({
-      brand: {
-        ar: brandArIn.value.trim() || 'مِركاب',
-        en: brandEnIn.value.trim() || 'MIRKAB',
-        separator: sepIn.value.trim() || '|',
-        copyrightYear: yearIn.value.trim() || '2026',
-        tagline: {
-          ar: tagArIn.value.trim(),
-          en: tagEnIn.value.trim()
+    saveCfgBtn.disabled = true;
+    saveCfgBtn.textContent = 'جاري الحفظ...';
+    try {
+      await MirkabStore.saveSiteConfig({
+        brand: {
+          ar: brandArIn.value.trim() || 'مِركاب',
+          en: brandEnIn.value.trim() || 'MIRKAB',
+          separator: sepIn.value.trim() || '|',
+          copyrightYear: yearIn.value.trim() || '2026',
+          tagline: {
+            ar: tagArIn.value.trim(),
+            en: tagEnIn.value.trim()
+          }
+        },
+        seo: {
+          ar: { title: seoTitleArIn.value.trim(), description: seoDescArIn.value.trim() },
+          en: { title: seoTitleEnIn.value.trim(), description: seoDescEnIn.value.trim() }
+        },
+        affiliate: {
+          disclosure: {
+            ar: discArIn.value.trim(),
+            en: discEnIn.value.trim()
+          }
         }
-      },
-      seo: {
-        ar: { title: seoTitleArIn.value.trim(), description: seoDescArIn.value.trim() },
-        en: { title: seoTitleEnIn.value.trim(), description: seoDescEnIn.value.trim() }
-      },
-      affiliate: {
-        disclosure: {
-          ar: discArIn.value.trim(),
-          en: discEnIn.value.trim()
-        }
-      }
-    });
+      });
 
-    const updatedBrandLabel = document.getElementById('sidebar-brand-name');
-    if (updatedBrandLabel) {
-      updatedBrandLabel.textContent = `${brandArIn.value.trim() || 'مِركاب'} ${sepIn.value.trim() || '|'} ${brandEnIn.value.trim() || 'MIRKAB'}`;
+      const updatedBrandLabel = document.getElementById('sidebar-brand-name');
+      if (updatedBrandLabel) {
+        updatedBrandLabel.textContent = `${brandArIn.value.trim() || 'مِركاب'} ${sepIn.value.trim() || '|'} ${brandEnIn.value.trim() || 'MIRKAB'}`;
+      }
+      showToast('تم حفظ إعدادات الموقع في Supabase بنجاح.');
+    } catch {
+      showToast('تعذر حفظ إعدادات الموقع في Supabase.');
+    } finally {
+      saveCfgBtn.disabled = false;
+      saveCfgBtn.textContent = 'حفظ إعدادات الموقع';
     }
-    showToast('تم حفظ إعدادات الموقع بنجاح.');
   });
 
   brandPanel.append(brandHeader, form);
 
-  // اللوحة 2: تحديث رمز الدخول المحلي للوحة الإدارة
+  // اللوحة 2: تحديث كلمة مرور حساب المالك في Supabase Auth
   const secPanel = createEl('section', 'panel');
   secPanel.append(
-    createEl('h3', 'panel-title', 'تغيير رمز الدخول المحلي'),
-    createEl('p', 'panel-subtitle', 'تذكير: رمز الدخول يُحفظ مشفّراً محلياً في متصفحك فقط ولا يغني عن المصادقة الخادمية عند الاستضافة العامة.')
+    createEl('h3', 'panel-title', 'تغيير كلمة مرور حساب المالك'),
+    createEl('p', 'panel-subtitle', 'تُحدّث كلمة المرور مباشرة في Supabase Auth لحساب المالك المسجّل حالياً.')
   );
 
   const secForm = createEl('form', 'form-grid');
   secForm.noValidate = true;
 
-  const curPass = createEl('input', 'field-input');
-  curPass.type = 'password';
-  curPass.autocomplete = 'current-password';
-
   const newPass = createEl('input', 'field-input');
   newPass.type = 'password';
+  newPass.dir = 'ltr';
   newPass.autocomplete = 'new-password';
   newPass.minLength = 6;
 
   const confPass = createEl('input', 'field-input');
   confPass.type = 'password';
+  confPass.dir = 'ltr';
   confPass.autocomplete = 'new-password';
   confPass.minLength = 6;
 
   const secErr = createEl('p', 'form-error is-full');
   secErr.hidden = true;
 
-  const changeBtn = createEl('button', 'btn btn-silver', 'تحديث رمز الدخول');
+  const changeBtn = createEl('button', 'btn btn-silver', 'تحديث كلمة المرور');
   changeBtn.type = 'submit';
   const changeWrap = createEl('div', 'form-field is-full');
   changeWrap.appendChild(changeBtn);
 
   secForm.append(
-    wrapField('رمز الدخول الحالي', curPass),
-    wrapField('رمز الدخول الجديد (6 أحرف فأكثر)', newPass),
-    wrapField('تأكيد رمز الدخول الجديد', confPass, true),
+    wrapField('كلمة المرور الجديدة (6 أحرف فأكثر)', newPass),
+    wrapField('تأكيد كلمة المرور الجديدة', confPass),
     secErr,
     changeWrap
   );
@@ -1722,20 +1817,24 @@ function renderSettingsSection(container) {
     if (!requireAdminAuth()) return;
     secErr.hidden = true;
     secErr.textContent = '';
+    changeBtn.disabled = true;
+    changeBtn.textContent = 'جاري التحديث...';
     try {
-      await AdminAuth.changePassphrase(curPass.value, newPass.value, confPass.value);
-      curPass.value = '';
+      await AdminAuth.updateOwnerPassword(newPass.value, confPass.value);
       newPass.value = '';
       confPass.value = '';
-      showToast('تم تحديث رمز الدخول المحلي بنجاح.');
+      showToast('تم تحديث كلمة مرور المالك في Supabase بنجاح.');
     } catch (err) {
       const msgs = {
-        CURRENT_PASSPHRASE_INVALID: 'رمز الدخول الحالي غير صحيح.',
-        PASSPHRASE_TOO_SHORT: 'الرمز الجديد يجب أن يكون 6 أحرف على الأقل.',
-        PASSPHRASE_MISMATCH: 'الرمز الجديد وتأكيده غير متطابقين.'
+        PASSWORD_TOO_SHORT: 'كلمة المرور الجديدة يجب أن تكون 6 أحرف على الأقل.',
+        PASSWORD_MISMATCH: 'كلمة المرور الجديدة وتأكيدها غير متطابقتين.',
+        NOT_AUTHENTICATED: 'انتهت جلسة المالك؛ أعد تسجيل الدخول أولاً.'
       };
-      secErr.textContent = msgs[err?.message] || 'تعذر تحديث رمز الدخول.';
+      secErr.textContent = msgs[err?.message] || 'تعذر تحديث كلمة المرور في Supabase.';
       secErr.hidden = false;
+    } finally {
+      changeBtn.disabled = false;
+      changeBtn.textContent = 'تحديث كلمة المرور';
     }
   });
 
@@ -1744,18 +1843,18 @@ function renderSettingsSection(container) {
 }
 
 /* ==========================================================================
-   8. النسخ الاحتياطي والاستعادة (JSON + IndexedDB Media)
+   8. النسخ الاحتياطي والاستعادة والمزامنة مع Supabase
    ========================================================================== */
 async function renderBackupSection(container) {
   adminState.pendingBackupData = null;
 
-  // تصدير نسخة احتياطية كاملة
+  // تصدير نسخة احتياطية كاملة من Supabase
   const exportPanel = createEl('section', 'panel');
   const expHeader = createEl('div', 'panel-header');
   const ehWrap = createEl('div');
   ehWrap.append(
     createEl('h3', 'panel-title', 'تصدير نسخة احتياطية كاملة'),
-    createEl('p', 'panel-subtitle', 'يُنشئ ملف JSON يحتوي على جميع المنتجات والإعدادات وحسابات التواصل والصور المرفوعة في IndexedDB.')
+    createEl('p', 'panel-subtitle', 'يُنشئ ملف JSON يحتوي على جميع المنتجات والإعدادات وحسابات التواصل والصور المخزّنة في Supabase Storage.')
   );
   expHeader.appendChild(ehWrap);
 
@@ -1772,7 +1871,7 @@ async function renderBackupSection(container) {
       const dlUrl = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = dlUrl;
-      a.download = `mirkab-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      a.download = `mirkab-supabase-backup-${new Date().toISOString().slice(0, 10)}.json`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -1788,11 +1887,11 @@ async function renderBackupSection(container) {
 
   exportPanel.append(expHeader, exportBtn);
 
-  // استيراد نسخة احتياطية
+  // استيراد نسخة احتياطية إلى Supabase
   const importPanel = createEl('section', 'panel');
   importPanel.append(
-    createEl('h3', 'panel-title', 'استيراد نسخة احتياطية'),
-    createEl('p', 'panel-subtitle', 'اختر ملف .json مصدر مسبقاً لاستعادة المنتجات والإعدادات والصور المحفوظة داخله.')
+    createEl('h3', 'panel-title', 'استيراد نسخة احتياطية إلى Supabase'),
+    createEl('p', 'panel-subtitle', 'اختر ملف .json مصدر مسبقاً لاستعادة المنتجات والإعدادات ورفع الصور إلى حاوية product-images.')
   );
 
   const fileIn = document.createElement('input');
@@ -1803,7 +1902,7 @@ async function renderBackupSection(container) {
   const summaryEl = createEl('p', 'panel-subtitle');
   summaryEl.hidden = true;
 
-  const applyImportBtn = createEl('button', 'btn btn-silver', 'استعادة البيانات من الملف');
+  const applyImportBtn = createEl('button', 'btn btn-silver', 'استعادة البيانات إلى Supabase');
   applyImportBtn.type = 'button';
   applyImportBtn.disabled = true;
 
@@ -1835,56 +1934,51 @@ async function renderBackupSection(container) {
     if (!requireAdminAuth() || !adminState.pendingBackupData) return;
     const ok = await askConfirmation(
       'تأكيد استيراد النسخة الاحتياطية',
-      'سيتم تحديث قائمة المنتجات وإعدادات الموقع واستعادة الصور الموجودة في ملف النسخة الاحتياطية.'
+      'سيتم تحديث قائمة المنتجات وإعدادات الموقع واستعادة الصور داخل Supabase.'
     );
     if (!ok) return;
 
+    applyImportBtn.disabled = true;
+    applyImportBtn.textContent = 'جاري الاستعادة...';
     try {
-      const backup = adminState.pendingBackupData;
-      if (Array.isArray(backup.mediaAssets)) {
-        for (const asset of backup.mediaAssets) {
-          if (asset && asset.dataUrl) {
-            await MirkabMediaDB.saveDataUrl(asset.dataUrl, {
-              id: asset.id || asset.ref,
-              productId: asset.productId,
-              role: asset.role,
-              name: asset.name,
-              mimeType: asset.mimeType,
-              width: asset.width,
-              height: asset.height,
-              createdAt: asset.createdAt
-            });
-          }
-        }
-      }
-      const res = MirkabStore.importCatalogSnapshot(backup);
-      showToast(`تمت استعادة ${res.productsCount} منتج وملفات الصور بنجاح.`);
+      const res = await MirkabStore.importCatalogSnapshot(adminState.pendingBackupData);
+      showToast(`تمت استعادة ${res.productsCount} منتج إلى Supabase بنجاح.`);
       adminState.pendingBackupData = null;
       fileIn.value = '';
-      applyImportBtn.disabled = true;
       await renderBackupSection(container);
     } catch {
-      showToast('تعذر استيراد النسخة الاحتياطية.');
+      showToast('تعذر استيراد النسخة الاحتياطية إلى Supabase.');
+      applyImportBtn.disabled = false;
+      applyImportBtn.textContent = 'استعادة البيانات إلى Supabase';
     }
   });
 
   importPanel.append(fileIn, summaryEl, applyImportBtn);
 
-  // استعادة المنتجات الـ 11 الافتراضية المفقودة دون حذف المنتجات الجديدة
+  // مزامنة وتهيئة البيانات والصور الافتراضية الـ 11 إلى Supabase (آمنة وقابلة لإعادة التشغيل)
   const seedPanel = createEl('section', 'panel');
   seedPanel.append(
-    createEl('h3', 'panel-title', 'استعادة المنتجات الأساسية الـ 11'),
-    createEl('p', 'panel-subtitle', 'تعيد أي منتج تم حذفه من الكتالوج الأساسي دون التأثير على المنتجات الجديدة أو التعديلات القائمة.')
+    createEl('h3', 'panel-title', 'مزامنة وتهيئة المنتجات الأساسية الـ 11 والصور إلى Supabase'),
+    createEl('p', 'panel-subtitle', 'ترفع أي صورة افتراضية مفقودة إلى product-images وتستعيد المنتجات الأساسية غير الموجودة دون تكرار أو مسح تعديلاتك الحالية.')
   );
-  const restoreSeedsBtn = createEl('button', 'btn btn-surface', 'استعادة المنتجات الافتراضية المفقودة');
+  const restoreSeedsBtn = createEl('button', 'btn btn-surface', 'مزامنة وتهيئة البيانات والصور إلى Supabase');
   restoreSeedsBtn.type = 'button';
-  restoreSeedsBtn.addEventListener('click', () => {
+  restoreSeedsBtn.addEventListener('click', async () => {
     if (!requireAdminAuth()) return;
-    const result = MirkabStore.restoreMissingDefaultProducts();
-    if (result.added > 0) {
-      showToast(`تمت استعادة ${result.added} منتج من القائمة الأساسية.`);
-    } else {
-      showToast('جميع المنتجات الـ 11 الأساسية موجودة بالفعل.');
+    restoreSeedsBtn.disabled = true;
+    restoreSeedsBtn.textContent = 'جاري المزامنة...';
+    try {
+      const result = await MirkabStore.restoreMissingDefaultProducts();
+      if (result.added > 0 || result.uploadedImages > 0) {
+        showToast(`تمت إضافة ${result.added} منتج ورفع ${result.uploadedImages} صورة إلى Supabase.`);
+      } else {
+        showToast('جميع المنتجات الـ 11 الأساسية وصورها موجودة ومحدّثة بالفعل في Supabase.');
+      }
+    } catch {
+      showToast('تعذر إتمام المزامنة مع Supabase.');
+    } finally {
+      restoreSeedsBtn.disabled = false;
+      restoreSeedsBtn.textContent = 'مزامنة وتهيئة البيانات والصور إلى Supabase';
     }
   });
   seedPanel.appendChild(restoreSeedsBtn);
@@ -1910,10 +2004,10 @@ function setupAdminShellEvents() {
 
   const logoutBtn = document.getElementById('admin-logout-btn');
   if (logoutBtn) {
-    logoutBtn.addEventListener('click', () => {
-      AdminAuth.signOut();
+    logoutBtn.addEventListener('click', async () => {
+      await AdminAuth.signOut();
       lockAdminInterface();
-      showToast('تم تسجيل الخروج وإغلاق الجلسة الإدارية.');
+      showToast('تم تسجيل الخروج وإغلاق جلسة Supabase.');
     });
   }
 
@@ -1924,12 +2018,19 @@ function setupAdminShellEvents() {
   if (closeBtn && sidebar) closeBtn.addEventListener('click', () => sidebar.classList.remove('is-open'));
 }
 
-function initAdminConsole() {
+async function initAdminConsole() {
   setupAuthForm();
   setupAdminShellEvents();
 
-  if (AdminAuth.isAuthenticated()) {
-    unlockAdminInterface();
+  AdminAuth.onAuthStateChange((session) => {
+    if (!session) {
+      lockAdminInterface();
+    }
+  });
+
+  const session = await AdminAuth.restoreSession();
+  if (session && AdminAuth.isAuthenticated()) {
+    await unlockAdminInterface();
   } else {
     lockAdminInterface();
   }

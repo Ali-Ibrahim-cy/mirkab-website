@@ -1111,26 +1111,37 @@ html.has-reveal .product-card.reveal-item.is-revealed.is-tilting {
   gap: 10px;
 }
 
-.footer-social[hidden] {
-  display: none;
-}
-
 .footer-social-link {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  width: 38px;
+  height: 38px;
   border-radius: var(--radius-control);
   border: 1px solid var(--border-hairline);
   background-color: var(--bg-charcoal);
   color: var(--silver);
-  transition: color 180ms var(--ease-luxury), border-color 180ms var(--ease-luxury);
+  transition:
+    color 180ms var(--ease-luxury),
+    border-color 180ms var(--ease-luxury),
+    background-color 180ms var(--ease-luxury),
+    transform 180ms var(--ease-luxury),
+    opacity 180ms var(--ease-luxury);
 }
 
-.footer-social-link:hover {
+.footer-social-link.is-linked:hover {
   color: var(--white);
   border-color: var(--white);
+  background-color: rgba(197, 199, 202, 0.1);
+  transform: translateY(-2px);
+}
+
+.footer-social-link.is-unlinked {
+  color: var(--gray-subtle);
+  background-color: rgba(17, 18, 20, 0.72);
+  border-color: rgba(197, 199, 202, 0.12);
+  opacity: 0.46;
+  cursor: default;
 }
 
 .footer-bottom {

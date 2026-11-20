@@ -1,68 +1,21 @@
 /**
- * مِركاب | MIRKAB — مدير الصور المحلي (IndexedDB)
+ * مِركاب | MIRKAB — مدير صور المنتجات عبر Supabase Storage
  * --------------------------------------------------------------------------
- * يحفظ صور المنتجات المرفوعة من جهاز المالك محلياً في IndexedDB
- * مع مراعاة أحجام الملفات، ومعاينة فورية، وتحسين الصور الكبيرة تلقائياً،
- * واسترجاعها بسلاسة في كل من لوحة الإدارة والموقع العام عبر معرفات idb://.
+ * يرفع الصور إلى Storage bucket `product-images` (للمالك فقط عبر سياسات RLS)،
+ * ويوفر الروابط العامة للزوار دون أي تخزين محلي (بدون IndexedDB).
  */
 
-const DB_NAME = 'mirkab_media_db';
-const DB_VERSION = 1;
-const STORE_NAME = 'images';
-const IDB_PREFIX = 'idb://';
-const MAX_RAW_FILE_BYTES = 12 * 1024 * 1024; // 12 MB حد أقصى للملف الخام قبل المعالجة
-const OPTIMIZE_THRESHOLD_BYTES = 900 * 1024; // ضغط تلقائي ذكي للصور الأكبر من 900 KB
+import {
+  supabase,
+  SUPABASE_URL,
+  PRODUCT_IMAGES_BUCKET
+} from './supabase-client.js';
+
+const MAX_RAW_FILE_BYTES = 12 * 1024 * 1024; // 12 MB
+const OPTIMIZE_THRESHOLD_BYTES = 900 * 1024; // ضغط ذكي للصور الكبيرة
 const MAX_DIMENSION_PX = 1600;
 
-const objectUrlCache = new Map();
-let dbPromise = null;
-
-export function isIndexedDbRef(src) {
-  return typeof src === 'string' && src.startsWith(IDB_PREFIX);
-}
-
-export function extractIdbKey(ref) {
-  return isIndexedDbRef(ref) ? ref.slice(IDB_PREFIX.length) : String(ref || '').trim();
-}
-
-export function toIdbRef(id) {
-  return `${IDB_PREFIX}${id}`;
-}
-
-function openMediaDatabase() {
-  if (dbPromise) return dbPromise;
-  if (typeof indexedDB === 'undefined') {
-    return Promise.reject(new Error('INDEXEDDB_UNSUPPORTED'));
-  }
-
-  dbPromise = new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
-
-    req.onupgradeneeded = (event) => {
-      const db = event.target.result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        const store = db.createObjectStore(STORE_NAME, { keyPath: 'id' });
-        store.createIndex('productId', 'productId', { unique: false });
-        store.createIndex('createdAt', 'createdAt', { unique: false });
-      }
-    };
-
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => {
-      dbPromise = null;
-      reject(req.error || new Error('INDEXEDDB_OPEN_FAILED'));
-    };
-  });
-
-  return dbPromise;
-}
-
-function generateImageId() {
-  const rand = Math.random().toString(36).slice(2, 8);
-  return `img_${Date.now()}_${rand}`;
-}
-
-function loadImageDimensionsAndMaybeOptimize(file) {
+function optimizeImageBlob(file) {
   return new Promise((resolve, reject) => {
     const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/avif', 'image/gif'];
     if (!file || !file.type || !allowedTypes.includes(file.type)) {
@@ -86,19 +39,11 @@ function loadImageDimensionsAndMaybeOptimize(file) {
       const needsCompress = file.size > OPTIMIZE_THRESHOLD_BYTES && file.type !== 'image/gif';
 
       if (!needsResize && !needsCompress) {
-        resolve({
-          blob: file,
-          mimeType: file.type,
-          width: origW,
-          height: origH,
-          size: file.size
-        });
+        resolve({ blob: file, mimeType: file.type, width: origW, height: origH, size: file.size });
         return;
       }
 
-      const scale = needsResize
-        ? Math.min(MAX_DIMENSION_PX / origW, MAX_DIMENSION_PX / origH)
-        : 1;
+      const scale = needsResize ? Math.min(MAX_DIMENSION_PX / origW, MAX_DIMENSION_PX / origH) : 1;
       const targetW = Math.max(1, Math.round(origW * scale));
       const targetH = Math.max(1, Math.round(origH * scale));
 
@@ -107,13 +52,7 @@ function loadImageDimensionsAndMaybeOptimize(file) {
       canvas.height = targetH;
       const ctx = canvas.getContext('2d');
       if (!ctx) {
-        resolve({
-          blob: file,
-          mimeType: file.type,
-          width: origW,
-          height: origH,
-          size: file.size
-        });
+        resolve({ blob: file, mimeType: file.type, width: origW, height: origH, size: file.size });
         return;
       }
 
@@ -121,25 +60,8 @@ function loadImageDimensionsAndMaybeOptimize(file) {
       const outMime = file.type === 'image/png' ? 'image/webp' : 'image/jpeg';
       canvas.toBlob(
         (outBlob) => {
-          if (!outBlob) {
-            resolve({
-              blob: file,
-              mimeType: file.type,
-              width: origW,
-              height: origH,
-              size: file.size
-            });
-            return;
-          }
-          // استخدم الملف الأصلي إذا كان أصغر حجماً بعد التحويل
-          if (outBlob.size >= file.size && !needsResize) {
-            resolve({
-              blob: file,
-              mimeType: file.type,
-              width: origW,
-              height: origH,
-              size: file.size
-            });
+          if (!outBlob || (outBlob.size >= file.size && !needsResize)) {
+            resolve({ blob: file, mimeType: file.type, width: origW, height: origH, size: file.size });
           } else {
             resolve({
               blob: outBlob,
@@ -164,6 +86,31 @@ function loadImageDimensionsAndMaybeOptimize(file) {
   });
 }
 
+function sanitizeFileBaseName(name) {
+  return String(name || 'image')
+    .replace(/\.[^.]+$/, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9-_]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 48) || 'image';
+}
+
+function extFromMime(mimeType) {
+  switch (mimeType) {
+    case 'image/webp':
+      return 'webp';
+    case 'image/png':
+      return 'png';
+    case 'image/gif':
+      return 'gif';
+    case 'image/avif':
+      return 'avif';
+    default:
+      return 'jpg';
+  }
+}
+
 function blobToDataUrl(blob) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -173,193 +120,142 @@ function blobToDataUrl(blob) {
   });
 }
 
-async function dataUrlToBlob(dataUrl) {
-  const res = await fetch(dataUrl);
-  return res.blob();
+export function extractStoragePathFromUrl(publicUrl) {
+  if (typeof publicUrl !== 'string') return '';
+  const marker = `/storage/v1/object/public/${PRODUCT_IMAGES_BUCKET}/`;
+  const idx = publicUrl.indexOf(marker);
+  if (idx === -1) return '';
+  return decodeURIComponent(publicUrl.slice(idx + marker.length).split('?')[0]);
+}
+
+export function getPublicStorageUrl(storagePath) {
+  const { data } = supabase.storage.from(PRODUCT_IMAGES_BUCKET).getPublicUrl(storagePath);
+  return data?.publicUrl || `${SUPABASE_URL}/storage/v1/object/public/${PRODUCT_IMAGES_BUCKET}/${storagePath}`;
 }
 
 export const MirkabMediaDB = {
-  isSupported() {
-    return typeof indexedDB !== 'undefined';
-  },
-
   async saveImageFile(file, meta = {}) {
-    const processed = await loadImageDimensionsAndMaybeOptimize(file);
-    const db = await openMediaDatabase();
-    const id = meta.id || generateImageId();
-    const record = {
-      id,
-      productId: meta.productId || '',
-      role: meta.role === 'gallery' ? 'gallery' : 'main',
-      name: file.name || `${id}.jpg`,
+    const processed = await optimizeImageBlob(file);
+    const folder = sanitizeFileBaseName(meta.productId || 'general');
+    const baseName = sanitizeFileBaseName(file.name);
+    const ext = extFromMime(processed.mimeType);
+    const storagePath = `${folder}/${Date.now()}_${Math.random().toString(36).slice(2, 6)}_${baseName}.${ext}`;
+
+    const { error } = await supabase.storage
+      .from(PRODUCT_IMAGES_BUCKET)
+      .upload(storagePath, processed.blob, {
+        contentType: processed.mimeType,
+        cacheControl: '3600',
+        upsert: false
+      });
+
+    if (error) {
+      throw new Error(`STORAGE_UPLOAD_FAILED: ${error.message}`);
+    }
+
+    const publicUrl = getPublicStorageUrl(storagePath);
+    return {
+      path: storagePath,
+      ref: publicUrl,
+      publicUrl,
+      name: file.name || `${baseName}.${ext}`,
       mimeType: processed.mimeType,
       size: processed.size,
       width: processed.width,
-      height: processed.height,
-      blob: processed.blob,
-      createdAt: new Date().toISOString()
-    };
-
-    await new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE_NAME, 'readwrite');
-      tx.objectStore(STORE_NAME).put(record);
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error || new Error('SAVE_FAILED'));
-    });
-
-    if (objectUrlCache.has(id)) {
-      URL.revokeObjectURL(objectUrlCache.get(id));
-      objectUrlCache.delete(id);
-    }
-
-    return {
-      ...record,
-      ref: toIdbRef(id)
+      height: processed.height
     };
   },
 
-  async saveDataUrl(dataUrl, meta = {}) {
+  async uploadSeedBlob(blob, storagePath, mimeType = 'image/jpeg') {
+    const { error } = await supabase.storage
+      .from(PRODUCT_IMAGES_BUCKET)
+      .upload(storagePath, blob, {
+        contentType: mimeType,
+        cacheControl: '86400',
+        upsert: true
+      });
+
+    if (error) {
+      throw new Error(`SEED_UPLOAD_FAILED: ${error.message}`);
+    }
+
+    return getPublicStorageUrl(storagePath);
+  },
+
+  async uploadDataUrl(dataUrl, storagePath) {
     if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/')) {
       throw new Error('INVALID_IMAGE_DATA_URL');
     }
-    const blob = await dataUrlToBlob(dataUrl);
-    const db = await openMediaDatabase();
-    const id = extractIdbKey(meta.id) || generateImageId();
-
-    const record = {
-      id,
-      productId: meta.productId || '',
-      role: meta.role === 'gallery' ? 'gallery' : 'main',
-      name: meta.name || `${id}.jpg`,
-      mimeType: blob.type || meta.mimeType || 'image/jpeg',
-      size: blob.size,
-      width: Number(meta.width) || 0,
-      height: Number(meta.height) || 0,
-      blob,
-      createdAt: meta.createdAt || new Date().toISOString()
-    };
-
-    await new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE_NAME, 'readwrite');
-      tx.objectStore(STORE_NAME).put(record);
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error || new Error('RESTORE_IMAGE_FAILED'));
-    });
-
-    if (objectUrlCache.has(id)) {
-      URL.revokeObjectURL(objectUrlCache.get(id));
-      objectUrlCache.delete(id);
-    }
-
-    return { ...record, ref: toIdbRef(id) };
-  },
-
-  async getImageRecord(refOrId) {
-    const id = extractIdbKey(refOrId);
-    if (!id) return null;
-    try {
-      const db = await openMediaDatabase();
-      return await new Promise((resolve, reject) => {
-        const tx = db.transaction(STORE_NAME, 'readonly');
-        const req = tx.objectStore(STORE_NAME).get(id);
-        req.onsuccess = () => resolve(req.result || null);
-        req.onerror = () => reject(req.error);
+    const res = await fetch(dataUrl);
+    const blob = await res.blob();
+    const { error } = await supabase.storage
+      .from(PRODUCT_IMAGES_BUCKET)
+      .upload(storagePath, blob, {
+        contentType: blob.type || 'image/jpeg',
+        cacheControl: '3600',
+        upsert: true
       });
-    } catch {
-      return null;
+    if (error) {
+      throw new Error(`BACKUP_MEDIA_UPLOAD_FAILED: ${error.message}`);
     }
-  },
-
-  async resolveImageUrl(srcRef) {
-    if (!isIndexedDbRef(srcRef)) return srcRef || '';
-    const id = extractIdbKey(srcRef);
-    if (!id) return '';
-
-    if (objectUrlCache.has(id)) {
-      return objectUrlCache.get(id);
-    }
-
-    const record = await this.getImageRecord(id);
-    if (!record || !record.blob) return '';
-
-    const objUrl = URL.createObjectURL(record.blob);
-    objectUrlCache.set(id, objUrl);
-    return objUrl;
+    return getPublicStorageUrl(storagePath);
   },
 
   async listImages() {
-    try {
-      const db = await openMediaDatabase();
-      const rows = await new Promise((resolve, reject) => {
-        const tx = db.transaction(STORE_NAME, 'readonly');
-        const req = tx.objectStore(STORE_NAME).getAll();
-        req.onsuccess = () => resolve(Array.isArray(req.result) ? req.result : []);
-        req.onerror = () => reject(req.error);
-      });
-      return rows
-        .map((row) => ({
-          ...row,
-          ref: toIdbRef(row.id)
-        }))
-        .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
-    } catch {
-      return [];
+    const collected = [];
+
+    async function walkFolder(prefix) {
+      const { data, error } = await supabase.storage
+        .from(PRODUCT_IMAGES_BUCKET)
+        .list(prefix, { limit: 200, sortBy: { column: 'created_at', order: 'desc' } });
+
+      if (error || !Array.isArray(data)) return;
+
+      for (const entry of data) {
+        if (!entry || !entry.name || entry.name === '.emptyFolderPlaceholder') continue;
+        const fullPath = prefix ? `${prefix}/${entry.name}` : entry.name;
+        // في Supabase Storage العناصر التي لا تملك id أو metadata تكون مجلدات
+        if (!entry.id && !entry.metadata) {
+          await walkFolder(fullPath);
+        } else {
+          collected.push({
+            id: entry.id || fullPath,
+            path: fullPath,
+            name: entry.name,
+            ref: getPublicStorageUrl(fullPath),
+            size: Number(entry.metadata?.size) || 0,
+            mimeType: entry.metadata?.mimetype || 'image/jpeg',
+            createdAt: entry.created_at || entry.updated_at || ''
+          });
+        }
+      }
     }
+
+    await walkFolder('');
+    return collected.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
   },
 
-  async updateImageMetadata(refOrId, patch = {}) {
-    const record = await this.getImageRecord(refOrId);
-    if (!record) return null;
-    const db = await openMediaDatabase();
-    const updated = {
-      ...record,
-      productId: patch.productId !== undefined ? patch.productId : record.productId,
-      role: patch.role !== undefined ? patch.role : record.role
-    };
-    await new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE_NAME, 'readwrite');
-      tx.objectStore(STORE_NAME).put(updated);
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-    });
-    return { ...updated, ref: toIdbRef(updated.id) };
-  },
+  async deleteImage(urlOrPath) {
+    const path = urlOrPath.startsWith('http')
+      ? extractStoragePathFromUrl(urlOrPath)
+      : String(urlOrPath || '').trim();
+    if (!path) return;
 
-  async deleteImage(refOrId) {
-    const id = extractIdbKey(refOrId);
-    if (!id) return;
-    const db = await openMediaDatabase();
-    await new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE_NAME, 'readwrite');
-      tx.objectStore(STORE_NAME).delete(id);
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-    });
-    if (objectUrlCache.has(id)) {
-      URL.revokeObjectURL(objectUrlCache.get(id));
-      objectUrlCache.delete(id);
+    const { error } = await supabase.storage
+      .from(PRODUCT_IMAGES_BUCKET)
+      .remove([path]);
+
+    if (error) {
+      throw new Error(`STORAGE_DELETE_FAILED: ${error.message}`);
     }
   },
 
   async getStorageStats() {
     const items = await this.listImages();
     const totalBytes = items.reduce((sum, item) => sum + (Number(item.size) || 0), 0);
-    let quotaBytes = 0;
-    let browserUsageBytes = 0;
-    if (typeof navigator !== 'undefined' && navigator.storage && typeof navigator.storage.estimate === 'function') {
-      try {
-        const est = await navigator.storage.estimate();
-        quotaBytes = Number(est.quota) || 0;
-        browserUsageBytes = Number(est.usage) || 0;
-      } catch {
-        // تجاهل في المتصفحات غير الداعمة
-      }
-    }
     return {
       count: items.length,
-      totalBytes,
-      quotaBytes,
-      browserUsageBytes
+      totalBytes
     };
   },
 
@@ -367,20 +263,23 @@ export const MirkabMediaDB = {
     const items = await this.listImages();
     const result = [];
     for (const item of items) {
-      if (!item.blob) continue;
-      const dataUrl = await blobToDataUrl(item.blob);
-      result.push({
-        id: item.id,
-        ref: toIdbRef(item.id),
-        productId: item.productId || '',
-        role: item.role || 'main',
-        name: item.name || '',
-        mimeType: item.mimeType || 'image/jpeg',
-        width: item.width || 0,
-        height: item.height || 0,
-        createdAt: item.createdAt || '',
-        dataUrl
-      });
+      try {
+        const res = await fetch(item.ref);
+        if (!res.ok) continue;
+        const blob = await res.blob();
+        const dataUrl = await blobToDataUrl(blob);
+        result.push({
+          path: item.path,
+          ref: item.ref,
+          name: item.name,
+          mimeType: item.mimeType,
+          size: item.size,
+          createdAt: item.createdAt,
+          dataUrl
+        });
+      } catch {
+        // تخطي ملف غير قابل للقراءة دون إيقاف التصدير
+      }
     }
     return result;
   }

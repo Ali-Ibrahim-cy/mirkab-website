@@ -1,26 +1,31 @@
 /**
- * مِركاب | MIRKAB — طبقة إدارة البيانات والتخزين المحلي (Store Adapter)
+ * مِركاب | MIRKAB — طبقة إدارة البيانات المرتبطة بـ Supabase
  * --------------------------------------------------------------------------
- * تجمع بين البيانات الافتراضية المضمّنة (data/products.js و data/site-config.js)
- * والتعديلات المحفوظة محلياً في المتصفح (localStorage) بحيث:
- *   - يقرأ الموقع العام التعديلات تلقائياً دون أي كود إداري ظاهر للزوار.
- *   - تدير لوحة التحكم المنتجات والإعدادات والروابط وحسابات التواصل بشكل كامل.
- *   - تحفظ البيانات الـ 11 الافتراضية ولا تُفقد أبداً عند التحديث.
+ * تدير القراءة والحفظ بالكامل عبر جداول Supabase:
+ *   - public.products (id, category, status, sort_order, data, updated_at)
+ *   - public.site_settings (id, data, updated_at)
+ *   - Storage bucket: product-images (عبر MirkabMediaDB)
+ *
+ * بدون أي اعتماد على localStorage أو IndexedDB لحفظ البيانات الأساسية.
  */
 
+import { supabase } from './supabase-client.js';
 import { SITE_CONFIG } from './site-config.js';
 import {
   PRODUCT_CATEGORIES,
   PRODUCT_IMAGES_BASE_DIR,
   PRODUCTS
 } from './products.js';
+import { MirkabMediaDB, getPublicStorageUrl } from './media-db.js';
 
-const STORAGE_KEYS = {
-  PRODUCTS: 'mirkab_catalog_override_v1',
-  SITE_CONFIG: 'mirkab_site_config_override_v1'
-};
-
+const SETTINGS_ROW_ID = 'main';
 const SOCIAL_ORDER = ['instagram', 'tiktok', 'snapchat', 'x', 'whatsapp'];
+
+const memoryState = {
+  siteConfig: structuredClone(SITE_CONFIG),
+  products: [],
+  loadedFromSupabase: false
+};
 
 export function sanitizeHttpsUrl(rawUrl) {
   if (typeof rawUrl !== 'string') return '';
@@ -40,8 +45,8 @@ export function resolveProductImagePath(rawPath) {
   if (!trimmed) return '';
 
   if (
-    trimmed.startsWith('idb://') ||
     trimmed.startsWith('https://') ||
+    trimmed.startsWith('http://') ||
     trimmed.startsWith('./') ||
     trimmed.startsWith('/') ||
     trimmed.startsWith('data:image/')
@@ -49,7 +54,11 @@ export function resolveProductImagePath(rawPath) {
     return trimmed;
   }
 
-  return `${PRODUCT_IMAGES_BASE_DIR}${trimmed}`;
+  return `${PRODUCT_IMAGES_BUCKET_OR_DIR(trimmed)}`;
+}
+
+function PRODUCT_IMAGES_BUCKET_OR_DIR(fileName) {
+  return `${PRODUCT_IMAGES_BASE_DIR}${fileName}`;
 }
 
 export function normalizeProductRecord(raw) {
@@ -114,27 +123,6 @@ export function validateProductRecord(product) {
   return { valid: errors.length === 0, errors };
 }
 
-function readLocalJson(key) {
-  if (typeof localStorage === 'undefined') return null;
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return null;
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
-}
-
-function writeLocalJson(key, value) {
-  if (typeof localStorage === 'undefined') return false;
-  try {
-    localStorage.setItem(key, JSON.stringify(value));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function mergeSiteConfig(defaults, override) {
   if (!override || typeof override !== 'object') {
     return structuredClone(defaults);
@@ -145,9 +133,10 @@ function mergeSiteConfig(defaults, override) {
     const defEntry = defaults.social?.[key] || { id: key, label: { ar: key, en: key }, url: '', enabled: true };
     const ovEntry = override.social?.[key];
     const ovUrl = typeof ovEntry === 'string' ? ovEntry : ovEntry?.url;
-    const ovEnabled = typeof ovEntry === 'object' && ovEntry !== null && typeof ovEntry.enabled === 'boolean'
-      ? ovEntry.enabled
-      : defEntry.enabled !== false;
+    const ovEnabled =
+      typeof ovEntry === 'object' && ovEntry !== null && typeof ovEntry.enabled === 'boolean'
+        ? ovEntry.enabled
+        : defEntry.enabled !== false;
 
     mergedSocial[key] = {
       id: key,
@@ -199,35 +188,273 @@ function mergeSiteConfig(defaults, override) {
   };
 }
 
-function readPersistedOrSeedProducts() {
-  const override = readLocalJson(STORAGE_KEYS.PRODUCTS);
-  if (Array.isArray(override)) {
-    return override
-      .map(normalizeProductRecord)
-      .filter((item) => item && item.id)
-      .sort((a, b) => a.order - b.order);
-  }
-  return PRODUCTS.map(normalizeProductRecord)
-    .filter((item) => item && item.id)
-    .sort((a, b) => a.order - b.order);
+function rowToProduct(row) {
+  if (!row || typeof row !== 'object') return null;
+  const payload = row.data && typeof row.data === 'object' ? row.data : {};
+  return normalizeProductRecord({
+    ...payload,
+    id: row.id || payload.id,
+    category: row.category || payload.category,
+    status: row.status || payload.status,
+    order: typeof row.sort_order === 'number' ? row.sort_order : payload.order
+  });
 }
 
-function persistProductsList(list) {
-  const normalized = list
-    .map(normalizeProductRecord)
-    .filter((item) => item && item.id)
-    .sort((a, b) => a.order - b.order)
-    .map((item, idx) => ({ ...item, order: idx + 1 }));
-  if (!writeLocalJson(STORAGE_KEYS.PRODUCTS, normalized)) {
-    throw new Error('LOCALSTORAGE_WRITE_FAILED');
-  }
-  return normalized;
+function productToDbRow(product) {
+  const normalized = normalizeProductRecord(product);
+  return {
+    id: normalized.id,
+    category: normalized.category,
+    status: normalized.status,
+    sort_order: normalized.order,
+    data: normalized,
+    updated_at: new Date().toISOString()
+  };
+}
+
+function extractFileNameFromPath(pathStr) {
+  const clean = String(pathStr || '').split('?')[0];
+  const idx = clean.lastIndexOf('/');
+  return idx >= 0 ? clean.slice(idx + 1) : clean;
 }
 
 export const MirkabStore = {
+  /**
+   * جلب البيانات العامة للزوار من Supabase قبل عرض المنتجات.
+   */
+  async loadPublicData() {
+    const [settingsRes, publishedRes] = await Promise.all([
+      supabase
+        .from('site_settings')
+        .select('id, data')
+        .eq('id', SETTINGS_ROW_ID)
+        .maybeSingle(),
+      supabase
+        .from('products')
+        .select('id, category, status, sort_order, data')
+        .eq('status', 'published')
+        .order('sort_order', { ascending: true })
+    ]);
+
+    if (settingsRes.error) {
+      throw new Error(`LOAD_SETTINGS_FAILED: ${settingsRes.error.message}`);
+    }
+    if (publishedRes.error) {
+      throw new Error(`LOAD_PRODUCTS_FAILED: ${publishedRes.error.message}`);
+    }
+
+    const hasSettingsRow = Boolean(settingsRes.data && settingsRes.data.data);
+    const publishedRows = Array.isArray(publishedRes.data) ? publishedRes.data : [];
+
+    // إذا كانت قاعدة البيانات مهيأة أو تحتوي على بيانات نعتمدها بالكامل
+    if (hasSettingsRow || publishedRows.length > 0) {
+      memoryState.siteConfig = mergeSiteConfig(SITE_CONFIG, settingsRes.data?.data);
+      memoryState.products = publishedRows
+        .map(rowToProduct)
+        .filter((item) => item && item.id)
+        .sort((a, b) => a.order - b.order);
+      memoryState.loadedFromSupabase = true;
+      return { source: 'supabase', count: memoryState.products.length };
+    }
+
+    // التحقق من وجود مسودات في قاعدة البيانات قبل أي تراجع لقائمة البدء الأولية
+    const countRes = await supabase.from('products').select('id', { count: 'exact', head: true });
+    if (!countRes.error && (countRes.count || 0) > 0) {
+      memoryState.siteConfig = structuredClone(SITE_CONFIG);
+      memoryState.products = [];
+      memoryState.loadedFromSupabase = true;
+      return { source: 'supabase', count: 0 };
+    }
+
+    // قاعدة بيانات بكر لم تُهيأ من لوحة المالك بعد: عرض الكتالوج الأولي المضمّن للقراءة فقط
+    memoryState.siteConfig = structuredClone(SITE_CONFIG);
+    memoryState.products = PRODUCTS.map(normalizeProductRecord)
+      .filter((item) => item && item.id && item.status === 'published')
+      .sort((a, b) => a.order - b.order);
+    memoryState.loadedFromSupabase = false;
+    return { source: 'seed-readonly', count: memoryState.products.length };
+  },
+
+  /**
+   * جلب جميع البيانات للمالك في لوحة التحكم، مع تهيئة تلقائية آمنة عند التشغيل الأول.
+   */
+  async loadAdminData() {
+    const [settingsRes, allProductsRes] = await Promise.all([
+      supabase
+        .from('site_settings')
+        .select('id, data')
+        .eq('id', SETTINGS_ROW_ID)
+        .maybeSingle(),
+      supabase
+        .from('products')
+        .select('id, category, status, sort_order, data')
+        .order('sort_order', { ascending: true })
+    ]);
+
+    if (settingsRes.error) {
+      throw new Error(`ADMIN_LOAD_SETTINGS_FAILED: ${settingsRes.error.message}`);
+    }
+    if (allProductsRes.error) {
+      throw new Error(`ADMIN_LOAD_PRODUCTS_FAILED: ${allProductsRes.error.message}`);
+    }
+
+    const dbProducts = Array.isArray(allProductsRes.data) ? allProductsRes.data : [];
+    const hasSettings = Boolean(settingsRes.data && settingsRes.data.data);
+
+    if (dbProducts.length === 0 || !hasSettings) {
+      await this.migrateDefaultsToSupabase();
+      const [refreshedSettings, refreshedProducts] = await Promise.all([
+        supabase.from('site_settings').select('id, data').eq('id', SETTINGS_ROW_ID).maybeSingle(),
+        supabase.from('products').select('id, category, status, sort_order, data').order('sort_order', { ascending: true })
+      ]);
+      memoryState.siteConfig = mergeSiteConfig(SITE_CONFIG, refreshedSettings.data?.data);
+      memoryState.products = (refreshedProducts.data || [])
+        .map(rowToProduct)
+        .filter((item) => item && item.id)
+        .sort((a, b) => a.order - b.order);
+      memoryState.loadedFromSupabase = true;
+      return { seeded: true, count: memoryState.products.length };
+    }
+
+    memoryState.siteConfig = mergeSiteConfig(SITE_CONFIG, settingsRes.data?.data);
+    memoryState.products = dbProducts
+      .map(rowToProduct)
+      .filter((item) => item && item.id)
+      .sort((a, b) => a.order - b.order);
+    memoryState.loadedFromSupabase = true;
+    return { seeded: false, count: memoryState.products.length };
+  },
+
+  /**
+   * تهيئة قابلة لإعادة التشغيل بأمان:
+   * - ترفع الصور الـ 11 إلى Storage bucket `product-images`
+   * - تنقل المنتجات المفقودة فقط إلى `public.products` دون تكرار أو مسح للتعديلات
+   * - تُنشئ صف الإعدادات `main` في `public.site_settings` إذا لم يكن موجوداً
+   */
+  async migrateDefaultsToSupabase() {
+    const [existingProductsRes, existingSettingsRes] = await Promise.all([
+      supabase.from('products').select('id, category, status, sort_order, data'),
+      supabase.from('site_settings').select('id, data').eq('id', SETTINGS_ROW_ID).maybeSingle()
+    ]);
+
+    if (existingProductsRes.error) {
+      throw new Error(`MIGRATION_CHECK_FAILED: ${existingProductsRes.error.message}`);
+    }
+
+    const existingRows = Array.isArray(existingProductsRes.data) ? existingProductsRes.data : [];
+    const existingMap = new Map(existingRows.map((r) => [r.id, r]));
+
+    // 1. تهيئة الإعدادات إذا لم تكن موجودة
+    if (!existingSettingsRes.data) {
+      const { error: setErr } = await supabase.from('site_settings').upsert(
+        {
+          id: SETTINGS_ROW_ID,
+          data: structuredClone(SITE_CONFIG),
+          updated_at: new Date().toISOString()
+        },
+        { onConflict: 'id' }
+      );
+      if (setErr) {
+        throw new Error(`MIGRATION_SETTINGS_FAILED: ${setErr.message}`);
+      }
+    }
+
+    // 2. التحقق من ملفات الصور الموجودة مسبقاً في product-images/defaults
+    const existingDefaultsRes = await supabase.storage
+      .from('product-images')
+      .list('defaults', { limit: 100 });
+    const existingDefaultFiles = new Set(
+      (existingDefaultsRes.data || []).map((f) => f.name)
+    );
+
+    let addedProducts = 0;
+    let uploadedImages = 0;
+
+    for (const seed of PRODUCTS) {
+      const normalizedSeed = normalizeProductRecord(seed);
+      const fileName = extractFileNameFromPath(normalizedSeed.image);
+      const storagePath = `defaults/${fileName}`;
+      let publicImageUrl = getPublicStorageUrl(storagePath);
+
+      if (!existingDefaultFiles.has(fileName) && typeof document !== 'undefined' && typeof fetch === 'function') {
+        try {
+          const baseHref =
+            document.baseURI.endsWith('/') || document.baseURI.endsWith('.html')
+              ? document.baseURI
+              : `${document.baseURI}/`;
+          const assetUrl = new URL(`../assets/images/products/${fileName}`, baseHref).href;
+          const res = await fetch(assetUrl);
+          if (res.ok) {
+            const blob = await res.blob();
+            publicImageUrl = await MirkabMediaDB.uploadSeedBlob(
+              blob,
+              storagePath,
+              blob.type || 'image/jpeg'
+            );
+            existingDefaultFiles.add(fileName);
+            uploadedImages += 1;
+          }
+        } catch {
+          // الإبقاء على الرابط العام المتوقع أو المحلي إذا تعذر الجلب في بيئة اختبار نصية
+        }
+      }
+
+      const existingRow = existingMap.get(normalizedSeed.id);
+      if (!existingRow) {
+        const record = {
+          ...normalizedSeed,
+          image: publicImageUrl
+        };
+        const { error: insErr } = await supabase
+          .from('products')
+          .upsert(productToDbRow(record), { onConflict: 'id' });
+        if (insErr) {
+          throw new Error(`MIGRATION_PRODUCT_INSERT_FAILED: ${insErr.message}`);
+        }
+        addedProducts += 1;
+      } else {
+        // إذا كان المنتج موجوداً وما زال يشير لمسار محلي قديم ./assets/ نحدّث رابط صورته إلى Storage العام دون تغيير باقي بياناته
+        const currentProduct = rowToProduct(existingRow);
+        if (currentProduct && currentProduct.image.startsWith('./assets/')) {
+          const updatedRecord = { ...currentProduct, image: publicImageUrl };
+          await supabase
+            .from('products')
+            .update(productToDbRow(updatedRecord))
+            .eq('id', currentProduct.id);
+        }
+      }
+    }
+
+    await this.loadAdminDataIfReady();
+    return {
+      added: addedProducts,
+      uploadedImages,
+      total: PRODUCTS.length
+    };
+  },
+
+  async loadAdminDataIfReady() {
+    const [settingsRes, allProductsRes] = await Promise.all([
+      supabase.from('site_settings').select('id, data').eq('id', SETTINGS_ROW_ID).maybeSingle(),
+      supabase.from('products').select('id, category, status, sort_order, data').order('sort_order', { ascending: true })
+    ]);
+    if (!settingsRes.error && settingsRes.data?.data) {
+      memoryState.siteConfig = mergeSiteConfig(SITE_CONFIG, settingsRes.data.data);
+    }
+    if (!allProductsRes.error && Array.isArray(allProductsRes.data)) {
+      memoryState.products = allProductsRes.data
+        .map(rowToProduct)
+        .filter((item) => item && item.id)
+        .sort((a, b) => a.order - b.order);
+      memoryState.loadedFromSupabase = true;
+    }
+  },
+
+  // ------------------------------------------------------------------------
+  // قراءات الذاكرة الحالية بعد المزامنة مع Supabase
+  // ------------------------------------------------------------------------
   getSiteConfig() {
-    const override = readLocalJson(STORAGE_KEYS.SITE_CONFIG);
-    return mergeSiteConfig(SITE_CONFIG, override);
+    return memoryState.siteConfig;
   },
 
   getSocialAccounts(options = {}) {
@@ -265,27 +492,28 @@ export const MirkabStore = {
 
   getProducts(options = {}) {
     const { category = 'all', includeDrafts = false } = options;
-    return readPersistedOrSeedProducts().filter((item) => {
-      if (!includeDrafts && item.status !== 'published') return false;
-      if (category && category !== 'all' && item.category !== category) return false;
-      return true;
-    });
+    return memoryState.products
+      .filter((item) => {
+        if (!includeDrafts && item.status !== 'published') return false;
+        if (category && category !== 'all' && item.category !== category) return false;
+        return true;
+      })
+      .sort((a, b) => a.order - b.order);
   },
 
   getProductById(productId, options = {}) {
     if (!productId) return null;
     const { includeDrafts = false } = options;
-    const found = readPersistedOrSeedProducts().find((item) => item.id === productId);
+    const found = memoryState.products.find((item) => item.id === productId);
     if (!found) return null;
     if (!includeDrafts && found.status !== 'published') return null;
     return found;
   },
 
   // ------------------------------------------------------------------------
-  // عمليات الإدارة والحفظ المحلي (تُستدعى من لوحة التحكم فقط بعد تسجيل الدخول)
+  // عمليات الإدارة عبر Supabase (محمية بصلاحية المالك عبر RLS)
   // ------------------------------------------------------------------------
-  upsertProduct(productInput, originalId = '') {
-    const current = readPersistedOrSeedProducts();
+  async upsertProduct(productInput, originalId = '') {
     const normalized = normalizeProductRecord(productInput);
     const validation = validateProductRecord(normalized);
     if (!validation.valid) {
@@ -294,50 +522,75 @@ export const MirkabStore = {
       throw err;
     }
 
+    const existingList = memoryState.products.slice();
     const matchId = originalId || normalized.id;
-    const existingIndex = current.findIndex((p) => p.id === matchId);
+    const existingIndex = existingList.findIndex((p) => p.id === matchId);
 
-    if (existingIndex >= 0) {
-      if (normalized.id !== matchId && current.some((p) => p.id === normalized.id)) {
-        throw new Error('DUPLICATE_PRODUCT_ID');
-      }
-      current[existingIndex] = normalized;
-    } else {
-      if (current.some((p) => p.id === normalized.id)) {
+    if (existingIndex < 0) {
+      if (existingList.some((p) => p.id === normalized.id)) {
         throw new Error('DUPLICATE_PRODUCT_ID');
       }
       if (!Number.isFinite(productInput.order)) {
-        normalized.order = current.length + 1;
+        normalized.order = existingList.length + 1;
       }
-      current.push(normalized);
+    } else if (normalized.id !== matchId) {
+      if (existingList.some((p) => p.id === normalized.id)) {
+        throw new Error('DUPLICATE_PRODUCT_ID');
+      }
+      const { error: delOldErr } = await supabase.from('products').delete().eq('id', matchId);
+      if (delOldErr) {
+        throw new Error(`PRODUCT_RENAME_DELETE_FAILED: ${delOldErr.message}`);
+      }
     }
 
-    persistProductsList(current);
+    const dbRow = productToDbRow(normalized);
+    const { error } = await supabase.from('products').upsert(dbRow, { onConflict: 'id' });
+    if (error) {
+      throw new Error(`PRODUCT_SAVE_FAILED: ${error.message}`);
+    }
+
+    if (existingIndex >= 0) {
+      existingList[existingIndex] = normalized;
+    } else {
+      existingList.push(normalized);
+    }
+
+    memoryState.products = existingList.sort((a, b) => a.order - b.order);
     return normalized;
   },
 
-  deleteProduct(productId) {
-    const current = readPersistedOrSeedProducts();
-    const filtered = current.filter((p) => p.id !== productId);
-    if (filtered.length === current.length) return false;
-    persistProductsList(filtered);
+  async deleteProduct(productId) {
+    const { error } = await supabase.from('products').delete().eq('id', productId);
+    if (error) {
+      throw new Error(`PRODUCT_DELETE_FAILED: ${error.message}`);
+    }
+    memoryState.products = memoryState.products
+      .filter((p) => p.id !== productId)
+      .map((p, idx) => ({ ...p, order: idx + 1 }));
     return true;
   },
 
-  toggleProductStatus(productId) {
-    const current = readPersistedOrSeedProducts();
-    const idx = current.findIndex((p) => p.id === productId);
-    if (idx < 0) return null;
-    current[idx] = {
-      ...current[idx],
-      status: current[idx].status === 'published' ? 'draft' : 'published'
-    };
-    persistProductsList(current);
-    return current[idx];
+  async toggleProductStatus(productId) {
+    const target = memoryState.products.find((p) => p.id === productId);
+    if (!target) return null;
+    const nextStatus = target.status === 'published' ? 'draft' : 'published';
+    const updated = { ...target, status: nextStatus };
+
+    const { error } = await supabase
+      .from('products')
+      .update(productToDbRow(updated))
+      .eq('id', productId);
+
+    if (error) {
+      throw new Error(`TOGGLE_STATUS_FAILED: ${error.message}`);
+    }
+
+    memoryState.products = memoryState.products.map((p) => (p.id === productId ? updated : p));
+    return updated;
   },
 
-  moveProductOrder(productId, direction) {
-    const current = readPersistedOrSeedProducts();
+  async moveProductOrder(productId, direction) {
+    const current = memoryState.products.slice().sort((a, b) => a.order - b.order);
     const idx = current.findIndex((p) => p.id === productId);
     if (idx < 0) return current;
     const targetIdx = direction === 'up' ? idx - 1 : idx + 1;
@@ -347,43 +600,72 @@ export const MirkabStore = {
     const [moved] = copy.splice(idx, 1);
     copy.splice(targetIdx, 0, moved);
     const reindexed = copy.map((item, i) => ({ ...item, order: i + 1 }));
-    return persistProductsList(reindexed);
+
+    const rows = reindexed.map(productToDbRow);
+    const { error } = await supabase.from('products').upsert(rows, { onConflict: 'id' });
+    if (error) {
+      throw new Error(`REORDER_FAILED: ${error.message}`);
+    }
+
+    memoryState.products = reindexed;
+    return reindexed;
   },
 
-  updateProductAmazonAndPrice(productId, { amazonUrl, price }) {
-    const current = readPersistedOrSeedProducts();
-    const idx = current.findIndex((p) => p.id === productId);
-    if (idx < 0) return null;
+  async updateProductAmazonAndPrice(productId, { amazonUrl, price }) {
+    const target = memoryState.products.find((p) => p.id === productId);
+    if (!target) return null;
+
     const trimmedUrl = typeof amazonUrl === 'string' ? amazonUrl.trim() : '';
     if (trimmedUrl && !sanitizeHttpsUrl(trimmedUrl)) {
       throw new Error('INVALID_AMAZON_URL');
     }
-    current[idx] = {
-      ...current[idx],
+
+    const updated = {
+      ...target,
       amazonUrl: sanitizeHttpsUrl(trimmedUrl),
       price: price ?? ''
     };
-    persistProductsList(current);
-    return current[idx];
+
+    const { error } = await supabase
+      .from('products')
+      .update(productToDbRow(updated))
+      .eq('id', productId);
+
+    if (error) {
+      throw new Error(`UPDATE_AMAZON_FAILED: ${error.message}`);
+    }
+
+    memoryState.products = memoryState.products.map((p) => (p.id === productId ? updated : p));
+    return updated;
   },
 
-  saveSiteConfig(nextPartialConfig) {
-    const current = this.getSiteConfig();
-    const merged = mergeSiteConfig(current, nextPartialConfig);
-    if (!writeLocalJson(STORAGE_KEYS.SITE_CONFIG, merged)) {
-      throw new Error('LOCALSTORAGE_WRITE_FAILED');
+  async saveSiteConfig(nextPartialConfig) {
+    const merged = mergeSiteConfig(memoryState.siteConfig, nextPartialConfig);
+    const { error } = await supabase.from('site_settings').upsert(
+      {
+        id: SETTINGS_ROW_ID,
+        data: merged,
+        updated_at: new Date().toISOString()
+      },
+      { onConflict: 'id' }
+    );
+
+    if (error) {
+      throw new Error(`SAVE_SITE_CONFIG_FAILED: ${error.message}`);
     }
+
+    memoryState.siteConfig = merged;
     return merged;
   },
 
-  saveSocialAccounts(socialUpdates) {
+  async saveSocialAccounts(socialUpdates) {
     const current = this.getSiteConfig();
     const nextSocial = {};
 
     SOCIAL_ORDER.forEach((key) => {
       const incoming = socialUpdates?.[key];
       const existing = current.social?.[key] || { id: key, label: { ar: key, en: key }, url: '', enabled: true };
-      const rawUrl = typeof incoming === 'string' ? incoming : (incoming?.url ?? existing.url);
+      const rawUrl = typeof incoming === 'string' ? incoming : incoming?.url ?? existing.url;
       const trimmed = String(rawUrl || '').trim();
       if (trimmed && !sanitizeHttpsUrl(trimmed)) {
         const err = new Error(`INVALID_SOCIAL_URL:${key}`);
@@ -400,38 +682,34 @@ export const MirkabStore = {
     return this.saveSiteConfig({ ...current, social: nextSocial });
   },
 
-  restoreMissingDefaultProducts() {
-    const current = readPersistedOrSeedProducts();
-    const existingIds = new Set(current.map((p) => p.id));
-    let added = 0;
-
-    PRODUCTS.forEach((seed) => {
-      const normalized = normalizeProductRecord(seed);
-      if (normalized && !existingIds.has(normalized.id)) {
-        normalized.order = current.length + 1;
-        current.push(normalized);
-        existingIds.add(normalized.id);
-        added += 1;
-      }
-    });
-
-    if (added > 0) {
-      persistProductsList(current);
-    }
-    return { added, total: current.length };
+  async restoreMissingDefaultProducts() {
+    return this.migrateDefaultsToSupabase();
   },
 
-  resetSiteConfigToDefault() {
-    if (typeof localStorage !== 'undefined') {
-      localStorage.removeItem(STORAGE_KEYS.SITE_CONFIG);
+  async resetSiteConfigToDefault() {
+    const defaults = structuredClone(SITE_CONFIG);
+    const { error } = await supabase.from('site_settings').upsert(
+      {
+        id: SETTINGS_ROW_ID,
+        data: defaults,
+        updated_at: new Date().toISOString()
+      },
+      { onConflict: 'id' }
+    );
+
+    if (error) {
+      throw new Error(`RESET_CONFIG_FAILED: ${error.message}`);
     }
-    return this.getSiteConfig();
+
+    memoryState.siteConfig = defaults;
+    return defaults;
   },
 
   exportCatalogSnapshot(mediaAssets = []) {
     return {
       schemaVersion: SITE_CONFIG.schemaVersion || '1.0.0',
       exportedAt: new Date().toISOString(),
+      source: 'supabase',
       siteConfig: this.getSiteConfig(),
       categories: this.getCategories(),
       products: this.getProducts({ includeDrafts: true }),
@@ -439,28 +717,66 @@ export const MirkabStore = {
     };
   },
 
-  importCatalogSnapshot(snapshot) {
+  async importCatalogSnapshot(snapshot) {
     if (!snapshot || typeof snapshot !== 'object' || !Array.isArray(snapshot.products)) {
       throw new Error('INVALID_BACKUP_FILE');
     }
 
+    // 1. استعادة الصور المرفوعة في Storage إن وجدت داخل النسخة الاحتياطية وتحديث مساراتها
+    const refRemap = new Map();
+    if (Array.isArray(snapshot.mediaAssets)) {
+      for (const asset of snapshot.mediaAssets) {
+        if (!asset || !asset.dataUrl) continue;
+        const targetPath =
+          asset.path ||
+          `restored/${Date.now()}_${extractFileNameFromPath(asset.name || 'image.jpg')}`;
+        const newPublicUrl = await MirkabMediaDB.uploadDataUrl(asset.dataUrl, targetPath);
+        if (asset.ref) refRemap.set(asset.ref, newPublicUrl);
+      }
+    }
+
+    const remapRef = (src) => (refRemap.has(src) ? refRemap.get(src) : src);
+
     const validProducts = snapshot.products
-      .map(normalizeProductRecord)
-      .filter((item) => validateProductRecord(item).valid);
+      .map((p) => {
+        const remappedGallery = Array.isArray(p.gallery) ? p.gallery.map(remapRef) : [];
+        return normalizeProductRecord({
+          ...p,
+          image: remapRef(p.image),
+          gallery: remappedGallery
+        });
+      })
+      .filter((item) => validateProductRecord(item).valid)
+      .map((item, idx) => ({ ...item, order: Number.isFinite(item.order) ? item.order : idx + 1 }));
 
     if (!validProducts.length) {
       throw new Error('BACKUP_HAS_NO_VALID_PRODUCTS');
     }
 
-    persistProductsList(validProducts);
+    const rows = validProducts.map(productToDbRow);
+    const { error: prodErr } = await supabase.from('products').upsert(rows, { onConflict: 'id' });
+    if (prodErr) {
+      throw new Error(`IMPORT_PRODUCTS_FAILED: ${prodErr.message}`);
+    }
 
     if (snapshot.siteConfig && typeof snapshot.siteConfig === 'object') {
       const mergedCfg = mergeSiteConfig(SITE_CONFIG, snapshot.siteConfig);
-      writeLocalJson(STORAGE_KEYS.SITE_CONFIG, mergedCfg);
+      const { error: cfgErr } = await supabase.from('site_settings').upsert(
+        {
+          id: SETTINGS_ROW_ID,
+          data: mergedCfg,
+          updated_at: new Date().toISOString()
+        },
+        { onConflict: 'id' }
+      );
+      if (cfgErr) {
+        throw new Error(`IMPORT_SETTINGS_FAILED: ${cfgErr.message}`);
+      }
+      memoryState.siteConfig = mergedCfg;
     }
 
-    return {
-      productsCount: validProducts.length
-    };
+    memoryState.products = validProducts.sort((a, b) => a.order - b.order);
+    memoryState.loadedFromSupabase = true;
+    return { productsCount: validProducts.length };
   }
 };
